@@ -95,31 +95,45 @@ For alloys not in the database:
 5. Copy the key and paste it into your `.env` file!
 
 ### 2. Configure Environment
-Create a `.env` file in the root:
+Create a `.env` file in the root directory:
 ```env
 OPENROUTER_API_KEY=your_key_here
-MP_API_KEY=your_materials_project_key
-DATABASE_URL=your_neon_postgres_url
 ```
 
-### 2. Run Backend
+### 3. Run Backend
+The backend automatically loads **8,759 materials** from the local CSV into RAM for sub-millisecond searching. No database setup is required!
 ```bash
 cd backend
 go run main.go
 ```
 
-### 3. Run Frontend
+### 4. Run Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-### 4. Sync Database (Optional)
-```bash
-cd data
-python3 seed_db.py
-```
+---
+
+## 🛠️ Advanced (Optional)
+If you wish to re-ingest data or scale to a cloud-based PostgreSQL:
+
+### Syncing to Cloud Database (Neon)
+1. Add `DATABASE_URL` to your `.env`.
+2. Sync the materials:
+   ```bash
+   cd data
+   python3 seed_db.py
+   ```
+
+### Re-fetching from Materials Project API
+1. Add `MP_API_KEY` to your `.env`.
+2. Run the ingestion script:
+   ```bash
+   cd data
+   python3 fetch_materials.py
+   ```
 
 ---
 
