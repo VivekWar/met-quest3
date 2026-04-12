@@ -1,7 +1,7 @@
-# Smart Alloy Selector: Tech Titans 🚀
+# Smart Alloy Selector & Material Recommendation: Tech Titans 🚀
 **Needle in the Data-Stack: The AI-Powered Virtual Materials Scientist**
 
-Built for the **MET-QUEST ’26** engineering competition, this platform is the official submission from **Team Tech Titans**. It is a high-performance material recommendation and predictive modeling system that replaces the grueling manual process of scraping disjointed tables (MatWeb, NASA TPSX) with a unified, **Long-Context RAG** engine.
+Built for the **MET-QUEST ’26** engineering competition, this platform is the official submission from **Team Tech Titans**. It features a high-performance **Material Recommendation** engine and a custom **Alloy Predictor** that replaces the grueling manual process of scraping disjointed tables (MatWeb, NASA TPSX) with a unified, **Long-Context RAG** engine.
 
 ---
 
@@ -36,8 +36,8 @@ The core processing engine built in Golang.
 | File | Logic |
 |------|-------|
 | `main.go` | Server entry point. Orchestrates the Gin router, CORS, and endpoint lifecycle. |
-| `handlers/recommend.go` | Entry point for natural language material queries. |
-| `handlers/predict.go` | Orchestrates the two-phase custom alloy property predictor. |
+| `handlers/recommend.go` | Entry point for natural language **Material Recommendation** queries. |
+| `handlers/predict.go` | Orchestrates the two-phase custom **Alloy Predictor**. |
 | `services/llm.go` | **The AI Core.** Implements Intent Extraction and **Long-Context Analyze**. |
 | `services/csv_db.go` | High-speed engine that parses 8k+ materials into RAM at startup. |
 | `services/predictor.go` | Implements Rule-of-Mixtures (Phase 1) and LLM Refinement (Phase 2). |
@@ -50,8 +50,8 @@ A modern React application built for speed and visual excellence.
 | File | UI / UX Role |
 |------|--------------|
 | `src/App.tsx` | Main application shell. Manages state for the AI search results. |
-| `src/components/QueryInput.tsx` | Specialized search interface with **Engineering Domain** selection. |
-| `src/components/PredictorPanel.tsx` | Dynamic composition builder with real-time property charts. |
+| `src/components/QueryInput.tsx` | Specialized search interface for **Material Recommendation**. |
+| `src/components/PredictorPanel.tsx` | Dynamic **Alloy Predictor** with real-time property charts. |
 | `src/components/ReportCard.tsx` | Renders the AI's "Virtual Scientist" report with Markdown support. |
 | `src/api/client.ts` | Type-safe Axios bridge for production and local backend calls. |
 | `src/styles/index.css` | Custom CSS design system (Glassmorphism, Vibrant Dark Mode). |
@@ -75,7 +75,7 @@ Traditional vector search loses the "holistic" engineering comparison. This proj
 ### 2. Domain Segregation Engine
 To maintain high precision without hitting token limits, we implemented **Domain Segregation**. The backend applies physics-based filters (e.g., *Aerospace*, *Biomedical*, *Plastics*) to mathematically narrow the search space before sending it to the AI.
 
-### 3. Two-Phase Property Predictor
+### 3. Two-Phase Alloy Predictor
 For alloys not in the database:
 - **Phase 1**: Programmatic **Rule-of-Mixtures** calculation from elemental data.
 - **Phase 2**: **Thermodynamic Refinement** via Gemini to account for crystalline phase stability and fatigue resistance.
@@ -84,10 +84,22 @@ For alloys not in the database:
 
 ## 🚀 Setup & Execution
 
-### 1. Configure Environment
+### 1. Requirements
+- **OpenRouter API Key**: This project uses **Google Gemini 1.5** via OpenRouter for high-speed, long-context reasoning.
+
+#### 🔑 How to get an OpenRouter API Key:
+1. Go to **[openrouter.ai](https://openrouter.ai/)**.
+2. Sign up or log in.
+3. Go to **[Settings → Keys](https://openrouter.ai/settings/keys)**.
+4. Click **"Create Key"** and give it a name (e.g., *Met-Quest*).
+5. Copy the key and paste it into your `.env` file!
+
+### 2. Configure Environment
 Create a `.env` file in the root:
 ```env
 OPENROUTER_API_KEY=your_key_here
+MP_API_KEY=your_materials_project_key
+DATABASE_URL=your_neon_postgres_url
 ```
 
 ### 2. Run Backend
