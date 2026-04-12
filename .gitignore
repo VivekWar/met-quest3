@@ -35,3 +35,4 @@ Thumbs.db
 .env
 node_modules/
 backend/met-quest-server
+.env.example
