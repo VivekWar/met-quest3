@@ -1,0 +1,37 @@
+# Secrets
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+*.log
+
+# Raw data (too large for git)
+data/materials_raw.json
+data/materials_raw/
+
+# Go
+backend/bin/
+backend/*.exe
+
+# Node / React
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.env
+node_modules/
+backend/met-quest-server
