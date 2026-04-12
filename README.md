@@ -1,7 +1,7 @@
-# Smart Alloy Selector: Antigravity 🚀
+# Smart Alloy Selector: Tech Titans 🚀
 **Needle in the Data-Stack: The AI-Powered Virtual Materials Scientist**
 
-Built for the **MET-QUEST ’26** engineering competition, **Antigravity** is a high-performance material recommendation and predictive modeling platform. It replaces the grueling manual process of scraping disjointed tables (MatWeb, NASA TPSX) with a unified, **Long-Context RAG** engine.
+Built for the **MET-QUEST ’26** engineering competition, this platform is the official submission from **Team Tech Titans**. It is a high-performance material recommendation and predictive modeling system that replaces the grueling manual process of scraping disjointed tables (MatWeb, NASA TPSX) with a unified, **Long-Context RAG** engine.
 
 ---
 
@@ -70,7 +70,7 @@ The lifecycle of the 8,759-entry materials database.
 ## ✨ Key Innovations (Brownie Points)
 
 ### 1. Long-Context RAG (LCR)
-Traditional vector search loses the "holistic" engineering comparison. Antigravity uses **LCR**, injecting up to 1,000 relevant materials directly into the LLM's context window. This allows the AI to "read" the entire catalog simultaneously, just like a human scientist.
+Traditional vector search loses the "holistic" engineering comparison. This project uses **LCR**, injecting up to 1,000 relevant materials directly into the LLM's context window. This allows the AI to "read" the entire catalog simultaneously, just like a human scientist.
 
 ### 2. Domain Segregation Engine
 To maintain high precision without hitting token limits, we implemented **Domain Segregation**. The backend applies physics-based filters (e.g., *Aerospace*, *Biomedical*, *Plastics*) to mathematically narrow the search space before sending it to the AI.
@@ -113,5 +113,5 @@ python3 seed_db.py
 
 ## 🏆 Development Team
 Designed and Engineered for **MET-QUEST ’26**. 
-- **Developer**: Vivek Warkad
-- **AI Engine**: Antigravity Node-L (Gemini-1.5 Optimized)
+- **Team**: Tech Titans
+- **AI Engine**: LCR-Node-L (Gemini-1.5 Optimized)
