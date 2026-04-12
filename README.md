@@ -88,8 +88,6 @@ For alloys not in the database:
 Create a `.env` file in the root:
 ```env
 OPENROUTER_API_KEY=your_key_here
-MP_API_KEY=your_materials_project_key
-DATABASE_URL=your_neon_postgres_url
 ```
 
 ### 2. Run Backend
