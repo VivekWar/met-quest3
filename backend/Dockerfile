@@ -23,8 +23,9 @@ WORKDIR /app
 # Add CA certificates for HTTPS calls to Gemini API
 RUN apk --no-cache add ca-certificates
 
-# Copy the binary from the builder stage
+# Copy the binary and data from the builder stage
 COPY --from=builder /app/met-quest-server .
+COPY data ./data
 
 # Expose port (Cloud Run sets PORT env var)
 ENV PORT=8080
