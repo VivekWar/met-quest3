@@ -33,33 +33,31 @@ func Recommend(c *gin.Context) {
 	}
 
 	// ── Step 2 (NEW): Long-Context Native Analysis ──────────────────────────
-	// We pass the explicit user Domain selection to segregate the dataset and prevent token	// Call Long-Context AI
+	// We pass the explicit user Domain selection to segregate the dataset and prevent token explosions
 	llmResponse, totalTokens, err := services.LongContextAnalyze(ctx, req.Query, req.Domain, allMaterials)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		log.Printf("ERROR: LongContextAnalyze: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI analysis failed: " + err.Error()})
 		return
 	}
 
-	log.Printf("🤖 AI Response Received (Tokens: %d): %s", totalTokens, llmResponse)
-
-	// Final result assembly
-	var recommended []models.Material
-	for _, id := range llmResponse.RecommendedIDs {
+	// ── Step 3: Map recommended IDs back to Material Structs ────────────────
+	var recommendations = []models.Material{}
+	for _, recID := range llmResponse.RecommendedIDs {
+		// Find the material in the catalog
 		for _, m := range allMaterials {
-			if m.ID == id {
-				recommended = append(recommended, m)
+			if m.ID == recID {
+				recommendations = append(recommendations, m)
 				break
 			}
 		}
 	}
 
-	log.Printf("🔍 Post-Processing: Matched %d materials from %d AI recommendations", len(recommended), len(llmResponse.RecommendedIDs))
-
 	// ── Return Payload ──────────────────────────────────────────────────────
 	resp := models.RecommendResponse{
 		Query:           req.Query,
 		ExtractedIntent: models.IntentJSON{}, // Blank, bypassed
-		Recommendations: recommended,
+		Recommendations: recommendations,
 		Report:          llmResponse.Report,
 		TokensUsed:      totalTokens,
 	}

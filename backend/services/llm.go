@@ -84,51 +84,50 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	googleKey := os.Getenv("GEMINI_API_KEY")
 	openRouterKey := os.Getenv("OPENROUTER_API_KEY")
 
-	// 1. Initial Key Validation
-	mainKey := googleKey
-	if mainKey == "" {
-		mainKey = openRouterKey
-	}
+	// 1. Initial Key Validation & Mock Mode
+	validGoogle := googleKey != "" && !strings.Contains(googleKey, "Dummy") && !strings.Contains(googleKey, "your_")
+	validOR := openRouterKey != "" && !strings.Contains(openRouterKey, "Dummy") && !strings.Contains(openRouterKey, "your_")
 
-	if mainKey == "" || strings.Contains(mainKey, "Dummy") {
-		log.Println("⚠️  No API Key found. Using MOCK AI response.")
+	if !validGoogle && !validOR {
+		log.Printf("⚠️  No valid API Keys found (G: %v, OR: %v). Using MOCK AI response.", googleKey != "", openRouterKey != "")
 		return getMockResponse(prompt)
 	}
 
-	// 2. Resilience Hierarchy: Loop through model/provider options
+	// 2. Resilience Hierarchy
 	
-	// Check which key is the Google key (AIza prefix)
+	// Tier 1: Google Native (Preferred)
+	// We check for "AIza" primarily, but we'll attempt ANY key in GoogleKey if it looks like a real key
 	activeGoogleKey := ""
 	if strings.HasPrefix(googleKey, "AIza") {
 		activeGoogleKey = googleKey
 	} else if strings.HasPrefix(openRouterKey, "AIza") {
 		activeGoogleKey = openRouterKey
+	} else if validGoogle {
+		// Fallback: try the googleKey even if it doesn't have the standard prefix
+		activeGoogleKey = googleKey
 	}
 
-	// Tier 1: Google Native (if valid key found)
 	if activeGoogleKey != "" {
-		// Verified list for this project's free-tier/region
-		googleModels := []string{"gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"}
-		log.Printf("🛡️  Resilience Engine Active | Chain: %v", googleModels)
+		googleModels := []string{"gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-2.0-flash-exp"}
+		log.Printf("🛡️  Attempting Google AI Tier (Key: %s)", maskKey(activeGoogleKey))
 		for _, model := range googleModels {
-			log.Printf("🤖 Attempting direct Google AI: %s", model)
 			text, tokens, status, err := callGoogleAI(ctx, activeGoogleKey, model, prompt, temperature, maxTokens)
 			if err == nil {
 				return text, tokens, nil
 			}
-			// Only fallback if the error is "Repairable" (503/429/404)
-			if status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable || status == http.StatusNotFound {
-				log.Printf("⚠️  Google AI %s failed (%d). Falling back to next model...", model, status)
+			// Fallback if status is 4xx/5xx (except 401 Unauthorized which usually means bad key)
+			if status != http.StatusUnauthorized && status != 0 {
+				log.Printf("⚠️  Google AI %s failed (%d). Trying next...", model, status)
 				continue
 			}
-			// Serious errors? Return early
-			return "", 0, fmt.Errorf("google ai fatal: %w", err)
+			log.Printf("❌ Google AI Fatal Error (%d): %v", status, err)
+			break // Don't try other models with a bad key
 		}
 	}
 
-	// Tier 2: OpenRouter Fallback (only if NOT an AIza key)
-	if openRouterKey != "" && !strings.HasPrefix(openRouterKey, "AIza") {
-		log.Printf("🤖 Attempting OpenRouter Fallback")
+	// Tier 2: OpenRouter Fallback
+	if validOR && !strings.HasPrefix(openRouterKey, "AIza") {
+		log.Printf("🤖 Attempting OpenRouter Fallback (Key: %s)", maskKey(openRouterKey))
 		text, tokens, _, err := callOpenRouter(ctx, openRouterKey, prompt, temperature, maxTokens)
 		if err == nil {
 			return text, tokens, nil
@@ -136,7 +135,14 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 		return "", 0, fmt.Errorf("all LLM providers failed: %w", err)
 	}
 
-	return "", 0, fmt.Errorf("no viable AI provider or key available for analysis")
+	return "", 0, fmt.Errorf("no viable AI provider or key available for analysis (Keys checked - Google: %v, OpenRouter: %v)", activeGoogleKey != "", validOR)
+}
+
+func maskKey(key string) string {
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "...." + key[len(key)-4:]
 }
 
 func getMockResponse(prompt string) (string, int, error) {

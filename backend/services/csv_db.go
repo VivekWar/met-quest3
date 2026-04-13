@@ -41,7 +41,10 @@ func LoadCSVDB() error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("could not find CSV in any expected paths (%v): %w", paths, err)
+		for _, p := range paths {
+			log.Printf("❌ CSV Search: Failed to open %s", p)
+		}
+		return fmt.Errorf("CRITICAL: Materials catalog (CSV) not found. Searched paths: %v. Current working directory: %s", paths, func() string { cwd, _ := os.Getwd(); return cwd }())
 	}
 	log.Printf("📂 CSV Loader: Successfully opened %s", foundPath)
 	defer file.Close()
