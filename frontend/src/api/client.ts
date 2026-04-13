@@ -75,3 +75,9 @@ export async function predict(composition: Record<string, number>): Promise<Pred
   const { data } = await api.post<PredictResponse>('/predict', { composition })
   return data
 }
+
+export async function ping(): Promise<void> {
+  // Simple health check to wake up the backend (cold start mitigation)
+  // No response handling needed
+  await api.get('/health').catch(() => { /* ignore */ })
+}

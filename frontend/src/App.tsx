@@ -1,10 +1,10 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import './styles/index.css'
 import { QueryInput }    from './components/QueryInput'
 import { ReportCard }    from './components/ReportCard'
 import { PropertyTable } from './components/PropertyTable'
 import { PredictorPanel } from './components/PredictorPanel'
-import { RecommendResponse } from './api/client'
+import { RecommendResponse, ping } from './api/client'
 
 type Tab = 'recommend' | 'predict'
 
@@ -12,6 +12,12 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab]       = useState<Tab>('recommend')
   const [result, setResult]             = useState<RecommendResponse | null>(null)
   const [loading, setLoading]           = useState(false)
+
+  // ── Cold Start Mitigation ────────────────────────────────────
+  useEffect(() => {
+    // Wake up the backend as soon as the app loads
+    ping()
+  }, [])
 
   const handleResult = useCallback((res: RecommendResponse) => {
     setResult(res)
