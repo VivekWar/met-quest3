@@ -53,9 +53,8 @@ type googleAIRequest struct {
 		} `json:"parts"`
 	} `json:"contents"`
 	GenerationConfig struct {
-		Temperature      float64 `json:"temperature"`
-		MaxOutputTokens  int     `json:"maxOutputTokens"`
-		ResponseMimeType string  `json:"responseMimeType,omitempty"`
+		Temperature     float64 `json:"temperature"`
+		MaxOutputTokens int     `json:"maxOutputTokens"`
 	} `json:"generationConfig"`
 }
 
@@ -182,7 +181,7 @@ func getMockResponse(prompt string) (string, int, error) {
 // callOpenRouter handles calls to the OpenRouter proxy
 func callOpenRouter(ctx context.Context, apiKey, prompt string, temperature float64, maxTokens int) (string, int, int, error) {
 	payload := openRouterRequest{
-		Model: "google/gemini-2.0-flash-exp",
+		Model: "google/gemini-2.0-flash",
 		Messages: []openRouterMessage{
 			{Role: "user", Content: prompt},
 		},
@@ -622,13 +621,11 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 			},
 		},
 		GenerationConfig: struct {
-			Temperature      float64 `json:"temperature"`
-			MaxOutputTokens  int     `json:"maxOutputTokens"`
-			ResponseMimeType string  `json:"responseMimeType,omitempty"`
+			Temperature     float64 `json:"temperature"`
+			MaxOutputTokens int     `json:"maxOutputTokens"`
 		}{
-			Temperature:      temperature,
-			MaxOutputTokens:  maxTokens,
-			ResponseMimeType: "application/json",
+			Temperature:     temperature,
+			MaxOutputTokens: maxTokens,
 		},
 	}
 
