@@ -75,8 +75,6 @@ type googleAIResponse struct {
 // ──────────────────────────────────────────────────────────────────────────
 //  Core LLM call (Provider-Aware: OpenRouter or Google Native)
 // ──────────────────────────────────────────────────────────────────────────
-
-// ──────────────────────────────────────────────────────────────────────────
 //  Core LLM call (Provider-Aware + High-Availability Fallback)
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -108,10 +106,24 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	}
 
 	if activeGoogleKey != "" {
-		googleModels := []string{"gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-2.0-flash-exp"}
+		googleModels := []string{
+			"gemini-2.5-flash",
+			"gemini-2.5-pro",
+			"gemini-3.1-flash-live-preview",
+			"gemini-1.5-flash",
+			"gemini-2.0-flash",
+		}
 		log.Printf("🛡️  Attempting Google AI Tier (Key: %s)", maskKey(activeGoogleKey))
 		for _, model := range googleModels {
-			text, tokens, status, err := callGoogleAI(ctx, activeGoogleKey, model, prompt, temperature, maxTokens)
+			// Try v1beta first
+			text, tokens, status, err := callGoogleAI(ctx, activeGoogleKey, model, prompt, temperature, maxTokens, "v1beta")
+			
+			// If 404, try stable v1 (some regions/models differ)
+			if status == http.StatusNotFound {
+				log.Printf("⚠️  Model %s not found on v1beta. Attempting v1 fallback...", model)
+				text, tokens, status, err = callGoogleAI(ctx, activeGoogleKey, model, prompt, temperature, maxTokens, "v1")
+			}
+
 			if err == nil {
 				return text, tokens, nil
 			}
@@ -144,7 +156,7 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	
 	skipReason := ""
 	if validOR && strings.HasPrefix(openRouterKey, "AIza") {
-		skipReason = " (OpenRouter tier skipped: key looks like a Google API key)"
+		skipReason = " (OpenRouter tier skipped: key starts with 'AIza' — check if you accidentally pasted a Google key into OPENROUTER_API_KEY)"
 	}
 
 	return "", 0, fmt.Errorf("%s%s (Keys checked - Google: %v, OpenRouter: %v)", detailedErr, skipReason, activeGoogleKey != "", validOR)
@@ -591,8 +603,8 @@ func RefinePrediction(ctx context.Context, input PredictorLLMInput) (PredictorLL
 }
 
 // callGoogleAI handles direct calls to Google's Generative Language API
-func callGoogleAI(ctx context.Context, apiKey string, model string, prompt string, temperature float64, maxTokens int) (string, int, int, error) {
-	baseURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
+func callGoogleAI(ctx context.Context, apiKey string, model string, prompt string, temperature float64, maxTokens int, apiVer string) (string, int, int, error) {
+	baseURL := fmt.Sprintf("https://generativelanguage.googleapis.com/%s/models/%s:generateContent", apiVer, model)
 	url := fmt.Sprintf("%s?key=%s", baseURL, apiKey)
 
 	payload := googleAIRequest{
