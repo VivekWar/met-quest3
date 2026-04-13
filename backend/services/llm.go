@@ -95,15 +95,15 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 
 	// 2. Resilience Hierarchy
 	
+	var lastErr error
+
 	// Tier 1: Google Native (Preferred)
-	// We check for "AIza" primarily, but we'll attempt ANY key in GoogleKey if it looks like a real key
 	activeGoogleKey := ""
 	if strings.HasPrefix(googleKey, "AIza") {
 		activeGoogleKey = googleKey
 	} else if strings.HasPrefix(openRouterKey, "AIza") {
 		activeGoogleKey = openRouterKey
 	} else if validGoogle {
-		// Fallback: try the googleKey even if it doesn't have the standard prefix
 		activeGoogleKey = googleKey
 	}
 
@@ -115,13 +115,14 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 			if err == nil {
 				return text, tokens, nil
 			}
+			lastErr = err
 			// Fallback if status is 4xx/5xx (except 401 Unauthorized which usually means bad key)
 			if status != http.StatusUnauthorized && status != 0 {
-				log.Printf("⚠️  Google AI %s failed (%d). Trying next...", model, status)
+				log.Printf("⚠️  Google AI %s failed (%d): %v", model, status, err)
 				continue
 			}
 			log.Printf("❌ Google AI Fatal Error (%d): %v", status, err)
-			break // Don't try other models with a bad key
+			break 
 		}
 	}
 
@@ -135,7 +136,18 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 		return "", 0, fmt.Errorf("all LLM providers failed: %w", err)
 	}
 
-	return "", 0, fmt.Errorf("no viable AI provider or key available for analysis (Keys checked - Google: %v, OpenRouter: %v)", activeGoogleKey != "", validOR)
+	// 3. Final Error Assembly
+	detailedErr := "no viable AI provider or key available"
+	if lastErr != nil {
+		detailedErr = lastErr.Error()
+	}
+	
+	skipReason := ""
+	if validOR && strings.HasPrefix(openRouterKey, "AIza") {
+		skipReason = " (OpenRouter tier skipped: key looks like a Google API key)"
+	}
+
+	return "", 0, fmt.Errorf("%s%s (Keys checked - Google: %v, OpenRouter: %v)", detailedErr, skipReason, activeGoogleKey != "", validOR)
 }
 
 func maskKey(key string) string {
