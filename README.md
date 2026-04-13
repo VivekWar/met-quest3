@@ -84,8 +84,11 @@ For alloys not in the database:
 
 ## 🚀 Setup & Execution
 
-### 1. Requirements
-- **OpenRouter API Key**: This project uses **Google Gemini 1.5** via OpenRouter for high-speed, long-context reasoning.
+### 1. Environment Variables
+The system is **Plug-and-Play**. You only need ONE of the following keys for the AI to work:
+
+- **Option A (Hugging Face / OpenRouter)**: Set `OPENROUTER_API_KEY` in your Space Settings.
+- **Option B (Direct Google Gemini)**: If you have a **Google AI Studio** key (starting with `AIza`), just paste it into the `OPENROUTER_API_KEY` field! The system will automatically detect it and skip the proxy.
 
 #### 🔑 How to get an OpenRouter API Key:
 1. Go to **[openrouter.ai](https://openrouter.ai/)**.

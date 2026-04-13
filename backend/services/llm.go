@@ -18,9 +18,10 @@ import (
 const openRouterBaseURL = "https://openrouter.ai/api/v1/chat/completions"
 
 // ──────────────────────────────────────────────────────────────────────────
-//  OpenRouter HTTP types
+//  AI Provider types
 // ──────────────────────────────────────────────────────────────────────────
 
+// OpenRouter (OpenAI-compatible) formats
 type openRouterRequest struct {
 	Model       string              `json:"model"`
 	Messages    []openRouterMessage `json:"messages"`
@@ -44,14 +45,40 @@ type openRouterResponse struct {
 	} `json:"usage"`
 }
 
+// Google AI Studio (Native) formats
+type googleAIRequest struct {
+	Contents []struct {
+		Parts []struct {
+			Text string `json:"text"`
+		} `json:"parts"`
+	} `json:"contents"`
+	GenerationConfig struct {
+		Temperature     float64 `json:"temperature"`
+		MaxOutputTokens int     `json:"maxOutputTokens"`
+	} `json:"generationConfig"`
+}
+
+type googleAIResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+	UsageMetadata struct {
+		TotalTokenCount int `json:"totalTokenCount"`
+	} `json:"usageMetadata"`
+}
+
 // ──────────────────────────────────────────────────────────────────────────
-//  Core LLM call (via OpenRouter)
+//  Core LLM call (Provider-Aware: OpenRouter or Google Native)
 // ──────────────────────────────────────────────────────────────────────────
 
 func callGemini(ctx context.Context, prompt string, temperature float64, maxTokens int) (string, int, error) {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" || strings.Contains(apiKey, "Dummy") {
-		log.Println("⚠️  OPENROUTER_API_KEY is missing/dummy. Using MOCK AI response.")
+		log.Println("⚠️  API_KEY is missing/dummy. Using MOCK AI response.")
 
 		// Very basic heuristics for demo
 		if strings.Contains(prompt, "Virtual Materials Scientist") {
@@ -67,8 +94,14 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 		}
 	}
 
+	// Detect Provider: Google AI Studio keys start with "AIza"
+	if strings.HasPrefix(apiKey, "AIza") {
+		return callGoogleAI(ctx, apiKey, prompt, temperature, maxTokens)
+	}
+
+	// Default: OpenRouter (OpenAI-compatible)
 	payload := openRouterRequest{
-		Model: "google/gemini-2.5-flash", // Can switch this natively (e.g. anthropic/claude-3.5-sonnet)
+		Model: "google/gemini-2.0-flash-exp",
 		Messages: []openRouterMessage{
 			{Role: "user", Content: prompt},
 		},
@@ -87,10 +120,10 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("HTTP-Referer", "http://localhost:5173") // Recommended by OpenRouter
-	req.Header.Set("X-Title", "Smart Alloy Selector")       // Recommended by OpenRouter
+	req.Header.Set("HTTP-Referer", "http://localhost:5173")
+	req.Header.Set("X-Title", "Smart Alloy Selector")
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("openrouter request failed: %w", err)
@@ -453,4 +486,67 @@ func RefinePrediction(ctx context.Context, input PredictorLLMInput) (PredictorLL
 	}
 
 	return out, tokens, nil
+}
+
+// callGoogleAI handles direct calls to Google's Generative Language API
+func callGoogleAI(ctx context.Context, apiKey string, prompt string, temperature float64, maxTokens int) (string, int, error) {
+	baseURL := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+	url := fmt.Sprintf("%s?key=%s", baseURL, apiKey)
+
+	payload := googleAIRequest{
+		Contents: []struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		}{
+			{
+				Parts: []struct {
+					Text string `json:"text"`
+				}{
+					{Text: prompt},
+				},
+			},
+		},
+		GenerationConfig: struct {
+			Temperature     float64 `json:"temperature"`
+			MaxOutputTokens int     `json:"maxOutputTokens"`
+		}{
+			Temperature:     temperature,
+			MaxOutputTokens: maxTokens,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", 0, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 90 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("google ai request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", 0, fmt.Errorf("google ai HTTP %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result googleAIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", 0, fmt.Errorf("google ai decode error: %w", err)
+	}
+
+	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+		return "", 0, fmt.Errorf("empty google ai response")
+	}
+
+	return result.Candidates[0].Content.Parts[0].Text, result.UsageMetadata.TotalTokenCount, nil
 }
