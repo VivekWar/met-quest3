@@ -24,10 +24,13 @@ func main() {
 		log.Printf("DB connection error: %v", err)
 	}
 
-	if db.Pool == nil {
-		err := services.LoadCSVDB()
-		if err != nil {
-			log.Fatalf("Fatal: Could not start fallback In-Memory DB: %v", err)
+	// ── Load Material Catalog ──────────────────────────────────────────
+	// Always load CSV into memory as it acts as the high-speed catalog for the AI
+	if err := services.LoadCSVDB(); err != nil {
+		log.Printf("⚠️  CSV Loader warning: %v", err)
+		// If Postgres is also missing, then we fatal
+		if db.Pool == nil {
+			log.Fatalf("Fatal: No database available (Postgres or CSV)")
 		}
 	}
 	defer db.Close()

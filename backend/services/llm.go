@@ -53,8 +53,9 @@ type googleAIRequest struct {
 		} `json:"parts"`
 	} `json:"contents"`
 	GenerationConfig struct {
-		Temperature     float64 `json:"temperature"`
-		MaxOutputTokens int     `json:"maxOutputTokens"`
+		Temperature      float64 `json:"temperature"`
+		MaxOutputTokens  int     `json:"maxOutputTokens"`
+		ResponseMimeType string  `json:"responseMimeType,omitempty"`
 	} `json:"generationConfig"`
 }
 
@@ -75,35 +76,81 @@ type googleAIResponse struct {
 //  Core LLM call (Provider-Aware: OpenRouter or Google Native)
 // ──────────────────────────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────────────────
+//  Core LLM call (Provider-Aware + High-Availability Fallback)
+// ──────────────────────────────────────────────────────────────────────────
+
 func callGemini(ctx context.Context, prompt string, temperature float64, maxTokens int) (string, int, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("OPENROUTER_API_KEY")
+	googleKey := os.Getenv("GEMINI_API_KEY")
+	openRouterKey := os.Getenv("OPENROUTER_API_KEY")
+
+	// 1. Initial Key Validation
+	mainKey := googleKey
+	if mainKey == "" {
+		mainKey = openRouterKey
 	}
 
-	if apiKey == "" || strings.Contains(apiKey, "Dummy") {
-		log.Println("⚠️  No API Key found (GEMINI_API_KEY or OPENROUTER_API_KEY). Using MOCK AI response.")
+	if mainKey == "" || strings.Contains(mainKey, "Dummy") {
+		log.Println("⚠️  No API Key found. Using MOCK AI response.")
+		return getMockResponse(prompt)
+	}
 
-		// Very basic heuristics for demo
-		if strings.Contains(prompt, "Virtual Materials Scientist") {
-			mockJSON := `{
-  "recommended_ids": [1, 2, 3],
-  "report": "## 🏆 Recommendation\n\n**Titanium Alloy Ti-6Al-4V** is the top recommendation for this application.\n\n## 📊 Properties Retrieved\n| Property | Ti-6Al-4V | Unit |\n|---|---|---|\n| Density | 4.43 | g/cm³ |\n\n## 🔬 Scientific Explanation\nTitanium alloys offer excellent solid-solution strengthening.\n\n## ⚠️ Engineering Trade-offs\n- High machining cost\n- Susceptible to galling\n\n*(Note: This is a demo mode AI response)*"
-}`
-			return mockJSON, 100, nil
-		} else if strings.Contains(prompt, "Category") || strings.Contains(prompt, "filters") {
-			return `{"category": "Metal", "filters": {}}`, 20, nil
-		} else {
-			return `{"refined_properties": {"density": 6.5, "yield_strength": 600}, "scientific_explanation": "Demo Prediction", "phase_diagram_notes": "Multiphase demo", "confidence": "Medium"}`, 80, nil
+	// 2. Resilience Hierarchy: Loop through model/provider options
+	
+	// Check which key is the Google key (AIza prefix)
+	activeGoogleKey := ""
+	if strings.HasPrefix(googleKey, "AIza") {
+		activeGoogleKey = googleKey
+	} else if strings.HasPrefix(openRouterKey, "AIza") {
+		activeGoogleKey = openRouterKey
+	}
+
+	// Tier 1: Google Native (if valid key found)
+	if activeGoogleKey != "" {
+		// Verified list for this project's free-tier/region
+		googleModels := []string{"gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"}
+		log.Printf("🛡️  Resilience Engine Active | Chain: %v", googleModels)
+		for _, model := range googleModels {
+			log.Printf("🤖 Attempting direct Google AI: %s", model)
+			text, tokens, status, err := callGoogleAI(ctx, activeGoogleKey, model, prompt, temperature, maxTokens)
+			if err == nil {
+				return text, tokens, nil
+			}
+			// Only fallback if the error is "Repairable" (503/429/404)
+			if status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable || status == http.StatusNotFound {
+				log.Printf("⚠️  Google AI %s failed (%d). Falling back to next model...", model, status)
+				continue
+			}
+			// Serious errors? Return early
+			return "", 0, fmt.Errorf("google ai fatal: %w", err)
 		}
 	}
 
-	// Detect Provider: Google AI Studio keys start with "AIza"
-	if strings.HasPrefix(apiKey, "AIza") {
-		return callGoogleAI(ctx, apiKey, prompt, temperature, maxTokens)
+	// Tier 2: OpenRouter Fallback (only if NOT an AIza key)
+	if openRouterKey != "" && !strings.HasPrefix(openRouterKey, "AIza") {
+		log.Printf("🤖 Attempting OpenRouter Fallback")
+		text, tokens, _, err := callOpenRouter(ctx, openRouterKey, prompt, temperature, maxTokens)
+		if err == nil {
+			return text, tokens, nil
+		}
+		return "", 0, fmt.Errorf("all LLM providers failed: %w", err)
 	}
 
-	// Default: OpenRouter (OpenAI-compatible)
+	return "", 0, fmt.Errorf("no viable AI provider or key available for analysis")
+}
+
+func getMockResponse(prompt string) (string, int, error) {
+	if strings.Contains(prompt, "Virtual Materials Scientist") {
+		mockJSON := `{"recommended_ids": [1, 2, 3], "report": "## 🏆 Recommendation\n(Mock Mode: AI is currently resting)"}`
+		return mockJSON, 100, nil
+	} else if strings.Contains(prompt, "Category") || strings.Contains(prompt, "filters") {
+		return `{"category": "Metal", "filters": {}}`, 20, nil
+	}
+	return `{"refined_properties": {"density": 6.5}, "scientific_explanation": "Mock Prediction"}`, 80, nil
+}
+
+// callOpenRouter handles calls to the OpenRouter proxy
+func callOpenRouter(ctx context.Context, apiKey, prompt string, temperature float64, maxTokens int) (string, int, int, error) {
 	payload := openRouterRequest{
 		Model: "google/gemini-2.0-flash-exp",
 		Messages: []openRouterMessage{
@@ -113,15 +160,8 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 		MaxTokens:   maxTokens,
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", 0, fmt.Errorf("marshal error: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openRouterBaseURL, bytes.NewReader(body))
-	if err != nil {
-		return "", 0, err
-	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, openRouterBaseURL, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("HTTP-Referer", "http://localhost:5173")
@@ -130,27 +170,79 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("openrouter request failed: %w", err)
+		return "", 0, 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return "", 0, fmt.Errorf("openrouter HTTP %d: %s", resp.StatusCode, string(b))
+		return "", 0, resp.StatusCode, fmt.Errorf("status %d: %s", resp.StatusCode, string(b))
 	}
 
 	var result openRouterResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", 0, fmt.Errorf("decode error: %w", err)
-	}
-
+	json.NewDecoder(resp.Body).Decode(&result)
 	if len(result.Choices) == 0 {
-		return "", 0, fmt.Errorf("empty openrouter response")
+		return "", 0, resp.StatusCode, fmt.Errorf("empty response")
 	}
 
-	text := result.Choices[0].Message.Content
-	tokens := result.Usage.TotalTokens
-	return text, tokens, nil
+	return result.Choices[0].Message.Content, result.Usage.TotalTokens, resp.StatusCode, nil
+}
+
+// cleanJSON extracts a JSON block from potentially messy LLM output (e.g. markdown fences)
+// repairJSON tries to fix common truncation issues in JSON strings
+func repairJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	// 1. Ensure it starts with {
+	if !strings.HasPrefix(raw, "{") {
+		idx := strings.Index(raw, "{")
+		if idx == -1 {
+			return raw
+		}
+		raw = raw[idx:]
+	}
+
+	// 2. Count braces and quotes
+	openBraces := strings.Count(raw, "{")
+	closeBraces := strings.Count(raw, "}")
+	openQuotes := strings.Count(raw, "\"")
+
+	// If quotes are odd, we likely cut off mid-string
+	if openQuotes%2 != 0 {
+		raw += "\""
+	}
+
+	// Close arrays if needed
+	if strings.Count(raw, "[") > strings.Count(raw, "]") {
+		raw += "]"
+	}
+
+	// Close braces
+	for openBraces > closeBraces {
+		raw += "}"
+		closeBraces++
+	}
+
+	return raw
+}
+
+func cleanJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	// Try to find the first '{' and last '}'
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+
+	if start != -1 && end != -1 && end > start {
+		return raw[start : end+1]
+	}
+	// Fallback to simpler trimming if braces aren't found cleanly
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	return strings.TrimSpace(raw)
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -207,16 +299,13 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 		return models.IntentJSON{}, 0, fmt.Errorf("intent extraction LLM call: %w", err)
 	}
 
-	// Strip markdown fences if present
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
+	// Try to clean and repair the JSON
+	cleaned := cleanJSON(raw)
+	repaired := repairJSON(cleaned)
 
 	var intent models.IntentJSON
-	if err := json.Unmarshal([]byte(raw), &intent); err != nil {
-		log.Printf("WARN: Failed to parse intent JSON: %v\nRaw: %s", err, raw)
+	if err := json.Unmarshal([]byte(repaired), &intent); err != nil {
+		log.Printf("WARN: Failed to parse intent JSON: %v\nRaw: %s\nRepaired: %s", err, raw, repaired)
 		// Return empty intent — search will fall back to a general query
 		return models.IntentJSON{}, tokens, nil
 	}
@@ -330,9 +419,9 @@ func FilterByDomain(domain string, all []models.Material) []models.Material {
 		}
 	}
 
-	// Safety cap: even if domain is large, cap to 4000
-	if len(filtered) > 4000 {
-		return filtered[:4000]
+	// Safety cap: even if domain is large, cap to 1000 to keep speed high and tokens low
+	if len(filtered) > 1000 {
+		return filtered[:1000]
 	}
 	return filtered
 }
@@ -375,23 +464,18 @@ Original engineer's problem statement: "%s"
 CATALOG (All Available Materials - pick ONLY from here):
 %s`, originalQuery, string(catalogJSON))
 
-	raw, tokens, err := callGemini(ctx, prompt, 0.1, 2000)
+	// Increased to 8,192 to give the AI plenty of room for extremely long technical reports
+	raw, tokens, err := callGemini(ctx, prompt, 0.1, 8192)
 	if err != nil {
 		return LongContextLLMResponse{}, 0, fmt.Errorf("long-context LLM call: %w", err)
 	}
 
-	// Extremely robust JSON block extraction
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start != -1 && end != -1 && end > start {
-		raw = raw[start : end+1]
-	} else {
-		log.Printf("WARN: No JSON braces found in raw LLM output: %s", raw)
-	}
+	cleaned := cleanJSON(raw)
+	repaired := repairJSON(cleaned)
 
 	var parsed LongContextLLMResponse
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		log.Printf("WARN: LongContext JSON Parse failed: %v\nRaw: %s", err, raw)
+	if err := json.Unmarshal([]byte(repaired), &parsed); err != nil {
+		log.Printf("WARN: LongContext JSON Parse failed: %v\nRaw: %s\nRepaired: %s", err, raw, repaired)
 		return LongContextLLMResponse{Report: "LLM responded with invalid JSON format. See logs."}, tokens, nil
 	}
 
@@ -478,11 +562,7 @@ func RefinePrediction(ctx context.Context, input PredictorLLMInput) (PredictorLL
 		return PredictorLLMOutput{}, 0, fmt.Errorf("predictor LLM call: %w", err)
 	}
 
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
+	raw = cleanJSON(raw)
 
 	var out PredictorLLMOutput
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
@@ -493,8 +573,8 @@ func RefinePrediction(ctx context.Context, input PredictorLLMInput) (PredictorLL
 }
 
 // callGoogleAI handles direct calls to Google's Generative Language API
-func callGoogleAI(ctx context.Context, apiKey string, prompt string, temperature float64, maxTokens int) (string, int, error) {
-	baseURL := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+func callGoogleAI(ctx context.Context, apiKey string, model string, prompt string, temperature float64, maxTokens int) (string, int, int, error) {
+	baseURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 	url := fmt.Sprintf("%s?key=%s", baseURL, apiKey)
 
 	payload := googleAIRequest{
@@ -512,45 +592,37 @@ func callGoogleAI(ctx context.Context, apiKey string, prompt string, temperature
 			},
 		},
 		GenerationConfig: struct {
-			Temperature     float64 `json:"temperature"`
-			MaxOutputTokens int     `json:"maxOutputTokens"`
+			Temperature      float64 `json:"temperature"`
+			MaxOutputTokens  int     `json:"maxOutputTokens"`
+			ResponseMimeType string  `json:"responseMimeType,omitempty"`
 		}{
-			Temperature:     temperature,
-			MaxOutputTokens: maxTokens,
+			Temperature:      temperature,
+			MaxOutputTokens:  maxTokens,
+			ResponseMimeType: "application/json",
 		},
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", 0, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", 0, err
-	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("google ai request failed: %w", err)
+		return "", 0, 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return "", 0, fmt.Errorf("google ai HTTP %d: %s", resp.StatusCode, string(b))
+		return "", 0, resp.StatusCode, fmt.Errorf("status %d: %s", resp.StatusCode, string(b))
 	}
 
 	var result googleAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", 0, fmt.Errorf("google ai decode error: %w", err)
-	}
-
+	json.NewDecoder(resp.Body).Decode(&result)
 	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
-		return "", 0, fmt.Errorf("empty google ai response")
+		return "", 0, resp.StatusCode, fmt.Errorf("empty response")
 	}
 
-	return result.Candidates[0].Content.Parts[0].Text, result.UsageMetadata.TotalTokenCount, nil
+	return result.Candidates[0].Content.Parts[0].Text, result.UsageMetadata.TotalTokenCount, resp.StatusCode, nil
 }
