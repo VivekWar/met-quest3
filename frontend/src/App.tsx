@@ -91,7 +91,7 @@ const App: React.FC = () => {
               boxShadow: '0 0 6px #00ff9f',
               display: 'inline-block',
             }} />
-            <span style={{ color: '#00ff9f', fontWeight: 600 }}>455 Materials Loaded</span>
+            <span style={{ color: '#00ff9f', fontWeight: 600 }}>8,759 Materials Loaded</span>
           </div>
         </div>
       </nav>
@@ -122,7 +122,7 @@ const App: React.FC = () => {
             <span className="gradient-text">AI-Powered</span> Material Selection
           </h1>
           <p style={{ maxWidth: 540, margin: '0 auto 40px', fontSize: '1.05rem', color: 'var(--color-text-muted)' }}>
-            Describe your engineering challenge. Our AI extracts your requirements, queries 455+ materials,
+            Describe your engineering challenge. Our AI extracts your requirements, queries 8,759+ materials,
             and delivers a <strong style={{ color: 'var(--color-text)' }}>Virtual Scientist report</strong> with deep technical analysis.
           </p>
 
