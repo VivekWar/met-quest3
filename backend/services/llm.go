@@ -53,8 +53,9 @@ type googleAIRequest struct {
 		} `json:"parts"`
 	} `json:"contents"`
 	GenerationConfig struct {
-		Temperature     float64 `json:"temperature"`
-		MaxOutputTokens int     `json:"maxOutputTokens"`
+		Temperature      float64 `json:"temperature"`
+		MaxOutputTokens  int     `json:"maxOutputTokens"`
+		ResponseMimeType string  `json:"responseMimeType,omitempty"`
 	} `json:"generationConfig"`
 }
 
@@ -91,7 +92,7 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	}
 
 	// 2. Resilience Hierarchy
-	
+
 	var lastErr error
 
 	// Tier 1: Google Native (Preferred)
@@ -106,17 +107,16 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 
 	if activeGoogleKey != "" {
 		googleModels := []string{
+			"gemini-3.1-flash-lite-preview",
+			"gemini-3-flash-preview",
 			"gemini-2.5-flash",
-			"gemini-2.0-flash-001",
 			"gemini-2.5-pro",
-			"gemini-flash-latest",
-			"gemini-2.0-flash",
 		}
 		log.Printf("🛡️  Attempting Google AI Tier (Key: %s)", maskKey(activeGoogleKey))
 		for _, model := range googleModels {
 			// Try v1beta first
 			text, tokens, status, err := callGoogleAI(ctx, activeGoogleKey, model, prompt, temperature, maxTokens, "v1beta")
-			
+
 			// If 404, try stable v1 (some regions/models differ)
 			if status == http.StatusNotFound {
 				log.Printf("⚠️  Model %s not found on v1beta. Attempting v1 fallback...", model)
@@ -133,7 +133,7 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 				continue
 			}
 			log.Printf("❌ Google AI Fatal Error (%d): %v", status, err)
-			break 
+			break
 		}
 	}
 
@@ -152,7 +152,7 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	if lastErr != nil {
 		detailedErr = lastErr.Error()
 	}
-	
+
 	skipReason := ""
 	if validOR && strings.HasPrefix(openRouterKey, "AIza") {
 		skipReason = " (OpenRouter tier skipped: key starts with 'AIza' — check if you accidentally pasted a Google key into OPENROUTER_API_KEY)"
@@ -181,7 +181,7 @@ func getMockResponse(prompt string) (string, int, error) {
 // callOpenRouter handles calls to the OpenRouter proxy
 func callOpenRouter(ctx context.Context, apiKey, prompt string, temperature float64, maxTokens int) (string, int, int, error) {
 	payload := openRouterRequest{
-		Model: "google/gemini-2.5-flash",
+		Model: "google/gemini-3-flash-preview",
 		Messages: []openRouterMessage{
 			{Role: "user", Content: prompt},
 		},
@@ -493,8 +493,8 @@ Original engineer's problem statement: "%s"
 CATALOG (All Available Materials - pick ONLY from here):
 %s`, originalQuery, string(catalogJSON))
 
-	// Set to 1500 to stay within current credit limits for OpenRouter failovers
-	raw, tokens, err := callGemini(ctx, prompt, 0.1, 1500)
+	// Token limit optimized for 1000 materials context: 2000 tokens for detailed report
+	raw, tokens, err := callGemini(ctx, prompt, 0.1, 2000)
 	if err != nil {
 		return LongContextLLMResponse{}, 0, fmt.Errorf("long-context LLM call: %w", err)
 	}
@@ -621,11 +621,13 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 			},
 		},
 		GenerationConfig: struct {
-			Temperature     float64 `json:"temperature"`
-			MaxOutputTokens int     `json:"maxOutputTokens"`
+			Temperature      float64 `json:"temperature"`
+			MaxOutputTokens  int     `json:"maxOutputTokens"`
+			ResponseMimeType string  `json:"responseMimeType,omitempty"`
 		}{
-			Temperature:     temperature,
-			MaxOutputTokens: maxTokens,
+			Temperature:      temperature,
+			MaxOutputTokens:  maxTokens,
+			ResponseMimeType: "application/json",
 		},
 	}
 

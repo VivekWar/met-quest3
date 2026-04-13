@@ -1,6 +1,6 @@
 module github.com/vivek/met-quest
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/gin-gonic/gin v1.9.1
@@ -35,18 +35,18 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	golang.org/x/arch v0.22.0 // indirect
-	golang.org/x/crypto v0.31.0 // indirect
+	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
 	google.golang.org/protobuf v1.35.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace (
-	golang.org/x/net => golang.org/x/net v0.33.0
 	golang.org/x/crypto => golang.org/x/crypto v0.31.0
+	golang.org/x/net => golang.org/x/net v0.33.0
 	golang.org/x/sys => golang.org/x/sys v0.28.0
 	golang.org/x/text => golang.org/x/text v0.21.0
 )
