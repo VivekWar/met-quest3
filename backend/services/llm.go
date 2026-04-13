@@ -109,10 +109,7 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 			"gemini-2.5-flash",
 			"gemini-2.0-flash-001",
 			"gemini-2.5-pro",
-			"gemini-3.1-flash-live-preview",
-			"gemini-1.5-flash-8b",
 			"gemini-flash-latest",
-			"gemini-1.5-pro",
 			"gemini-2.0-flash",
 		}
 		log.Printf("🛡️  Attempting Google AI Tier (Key: %s)", maskKey(activeGoogleKey))
@@ -199,7 +196,7 @@ func callOpenRouter(ctx context.Context, apiKey, prompt string, temperature floa
 	req.Header.Set("HTTP-Referer", "http://localhost:5173")
 	req.Header.Set("X-Title", "Smart Alloy Selector")
 
-	client := &http.Client{Timeout: 90 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, 0, err
@@ -636,7 +633,7 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 90 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, 0, err

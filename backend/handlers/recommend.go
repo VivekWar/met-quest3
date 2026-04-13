@@ -22,7 +22,7 @@ func Recommend(c *gin.Context) {
 
 	log.Printf("Long-Context Recommend triggered | Query: %q", req.Query)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second) // covers 120s client timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second) // covers multi-tier resilience logic
 	defer cancel()
 
 	// ── Step 1: Load FULL database into context ─────────────────────────────

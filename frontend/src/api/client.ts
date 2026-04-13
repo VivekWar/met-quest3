@@ -3,7 +3,7 @@ import axios from 'axios'
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'https://vivekwa-met-quest-api.hf.space/api/v1',
   headers: { 'Content-Type': 'application/json' },
-  timeout: 150000, // 150s — high-density long-context calls can be slow
+  timeout: 180000, // 150s — high-density long-context calls can be slow
 })
 
 // ── Types ─────────────────────────────────────────────────────────────────
