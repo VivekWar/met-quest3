@@ -24,6 +24,7 @@ import sys
 import json
 import time
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +56,7 @@ MP_BASE_URL = "https://api.materialsproject.org"
 DATA_DIR   = Path(__file__).parent
 RAW_JSON   = DATA_DIR / "materials_raw.json"
 OUTPUT_CSV = DATA_DIR / "materials_cleaned.csv"
+POLYMER_ENRICHMENT_CSV = DATA_DIR / "polymer_enrichment.csv"
 
 # ── API Client ────────────────────────────────────────────────────────────
 class MPRestClient:
@@ -210,6 +212,37 @@ def safe_float(val) -> Optional[float]:
         return None if math.isnan(f) else f
     except (TypeError, ValueError):
         return None
+
+
+def normalize_key(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    return s
+
+
+def load_polymer_enrichment() -> pd.DataFrame:
+    """Load optional polymer Tg/HDT enrichment table."""
+    if not POLYMER_ENRICHMENT_CSV.exists():
+        log.warning(f"Polymer enrichment file not found: {POLYMER_ENRICHMENT_CSV}")
+        return pd.DataFrame()
+
+    df = pd.read_csv(POLYMER_ENRICHMENT_CSV)
+    required = {"name", "formula", "glass_transition_temp", "heat_deflection_temp"}
+    missing = required - set(df.columns)
+    if missing:
+        log.warning(f"Polymer enrichment missing required columns: {sorted(missing)}")
+        return pd.DataFrame()
+
+    for col in ["glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", "processing_temp_max_c", "crystallinity"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["name_key"] = df["name"].apply(normalize_key)
+    df["formula_key"] = df["formula"].apply(normalize_key)
+    log.info(f"Loaded polymer enrichment rows: {len(df)}")
+    return df
 
 
 # ── Curated Dataset ───────────────────────────────────────────────────────
@@ -708,6 +741,53 @@ def merge_datasets(api_df: pd.DataFrame, curated_df: pd.DataFrame) -> pd.DataFra
     return combined
 
 
+def apply_polymer_enrichment(df: pd.DataFrame, enrich_df: pd.DataFrame) -> pd.DataFrame:
+    """Apply Tg/HDT enrichment to polymer rows by normalized name/formula keys."""
+    if enrich_df.empty:
+        return df
+
+    for col in [
+        "glass_transition_temp",
+        "heat_deflection_temp",
+        "processing_temp_min_c",
+        "processing_temp_max_c",
+        "crystallinity",
+    ]:
+        if col not in df.columns:
+            df[col] = None
+
+    df["name_key"] = df["name"].apply(normalize_key)
+    df["formula_key"] = df["formula"].apply(normalize_key)
+
+    e_by_name = enrich_df.set_index("name_key").to_dict("index")
+    e_by_formula = enrich_df.set_index("formula_key").to_dict("index")
+
+    updates = 0
+    for i, row in df.iterrows():
+        if str(row.get("category", "")).lower() != "polymer":
+            continue
+
+        key_name = row.get("name_key", "")
+        key_formula = row.get("formula_key", "")
+        src = None
+        if key_name and key_name in e_by_name:
+            src = e_by_name[key_name]
+        elif key_formula and key_formula in e_by_formula:
+            src = e_by_formula[key_formula]
+
+        if not src:
+            continue
+
+        for col in ["glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", "processing_temp_max_c", "crystallinity"]:
+            if col in src and pd.notna(src[col]):
+                df.at[i, col] = src[col]
+        updates += 1
+
+    df.drop(columns=["name_key", "formula_key"], inplace=True, errors="ignore")
+    log.info(f"Applied polymer enrichment to {updates} rows")
+    return df
+
+
 def main():
     log.info("=" * 60)
     log.info("Smart Alloy Selector — Materials Data Fetcher v2")
@@ -731,6 +811,10 @@ def main():
 
     # 3. Merge
     final_df = merge_datasets(api_df, curated_df)
+
+    # 3b. Enrich polymers with Tg/HDT and processing fields if enrichment file exists
+    enrich_df = load_polymer_enrichment()
+    final_df = apply_polymer_enrichment(final_df, enrich_df)
 
     # 4. Save
     final_df.to_csv(OUTPUT_CSV, index=False)

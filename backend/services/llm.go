@@ -527,15 +527,17 @@ func LongContextAnalyze(ctx context.Context, originalQuery string, domain string
 
 	// Create a massively stripped down version of materials to save tokens
 	type MinMat struct {
-		ID int      `json:"id"`
-		N  string   `json:"name"`
-		C  string   `json:"category"`
-		D  *float64 `json:"density,omitempty"`
-		MP *float64 `json:"melt_pt,omitempty"`
-		YS *float64 `json:"yield_str,omitempty"`
-		YM *float64 `json:"youngs_mod,omitempty"`
-		R  *float64 `json:"resistivity,omitempty"`
-		TC *float64 `json:"therm_cond,omitempty"`
+		ID  int      `json:"id"`
+		N   string   `json:"name"`
+		C   string   `json:"category"`
+		D   *float64 `json:"density,omitempty"`
+		Tg  *float64 `json:"tg_k,omitempty"`
+		HDT *float64 `json:"hdt_k,omitempty"`
+		MP  *float64 `json:"melt_pt,omitempty"`
+		YS  *float64 `json:"yield_str,omitempty"`
+		YM  *float64 `json:"youngs_mod,omitempty"`
+		R   *float64 `json:"resistivity,omitempty"`
+		TC  *float64 `json:"therm_cond,omitempty"`
 	}
 
 	// 1. Filter raw materials by domain to restrict LLM token flood
@@ -545,7 +547,8 @@ func LongContextAnalyze(ctx context.Context, originalQuery string, domain string
 	for _, m := range allMaterials {
 		minDB = append(minDB, MinMat{
 			ID: m.ID, N: m.Name, C: m.Category,
-			D: m.Density, MP: m.MeltingPoint, YS: m.YieldStrength,
+			D: m.Density, Tg: m.GlassTransitionTemp, HDT: m.HeatDeflectionTemp,
+			MP: m.MeltingPoint, YS: m.YieldStrength,
 			YM: m.YoungsModulus, R: m.ElectricalResistivity, TC: m.ThermalConductivity,
 		})
 	}

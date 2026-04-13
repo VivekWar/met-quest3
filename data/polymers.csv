@@ -1,10 +1,10 @@
 name,formula,category,subcategory,density,thermal_conductivity,yield_strength,tensile_strength,youngs_modulus,hardness_vickers,thermal_expansion,electrical_resistivity,notes,source,mp_material_id,glass_transition_temp,heat_deflection_temp,processing_temp_min_c,processing_temp_max_c,crystallinity
-PTFE Teflon,(C2F4)n,Polymer,Fluoropolymer,2.2,0.25,,31.0,0.5,,135.0,1e+16,,Curated,,,,,,
-PETG,(C10H8O4)n,Polymer,3D-Printing,1.27,0.29,50.0,53.0,2.1,,68.0,1000000000000000.0,,Curated,,,,,,
-PLA,(C3H4O2)n,Polymer,3D-Printing,1.24,0.13,50.0,60.0,3.5,,68.0,1e+16,,Curated,,,,,,
-ABS,(C8H8.C4H6.C3H3N)n,Polymer,3D-Printing,1.04,0.17,40.0,45.0,2.3,,90.0,100000000000000.0,,Curated,,,,,,
-PEEK,(C19H12O3)n,Polymer,Thermoplastic,1.32,0.25,91.0,100.0,3.6,,47.0,49000000000000.0,,Curated,,,,,,
-Nylon 6/6 PA66,(C12H22N2O2)n,Polymer,Polyamide,1.14,0.25,60.0,83.0,3.0,,80.0,1000000000000.0,,Curated,,,,,,
-Polycarbonate PC,(C15H16O2)n,Polymer,Thermoplastic,1.2,0.2,55.0,65.0,2.6,,65.0,100000000000000.0,,Curated,,,,,,
-Polypropylene PP,(C3H6)n,Polymer,Thermoplastic,0.9,0.22,30.0,35.0,1.4,,100.0,100000000000000.0,,Curated,,,,,,
-Ultem PEI,(C37H24N2O6)n,Polymer,Thermoplastic,1.27,0.22,105.0,105.0,3.3,,56.0,1000000000000000.0,,Curated,,,,,,
+PTFE Teflon,(C2F4)n,Polymer,Fluoropolymer,2.2,0.25,,31.0,0.5,,135.0,1e+16,,Curated,,388.15,380.15,340.0,380.0,95.0
+PETG,(C10H8O4)n,Polymer,3D-Printing,1.27,0.29,50.0,53.0,2.1,,68.0,1000000000000000.0,,Curated,,353.15,343.15,230.0,260.0,0.0
+PLA,(C3H4O2)n,Polymer,3D-Printing,1.24,0.13,50.0,60.0,3.5,,68.0,1e+16,,Curated,,333.15,328.15,190.0,220.0,10.0
+ABS,(C8H8.C4H6.C3H3N)n,Polymer,3D-Printing,1.04,0.17,40.0,45.0,2.3,,90.0,100000000000000.0,,Curated,,378.15,368.15,230.0,260.0,0.0
+PEEK,(C19H12O3)n,Polymer,Thermoplastic,1.32,0.25,91.0,100.0,3.6,,47.0,49000000000000.0,,Curated,,416.15,433.15,360.0,410.0,30.0
+Nylon 6/6 PA66,(C12H22N2O2)n,Polymer,Polyamide,1.14,0.25,60.0,83.0,3.0,,80.0,1000000000000.0,,Curated,,323.15,343.15,250.0,290.0,35.0
+Polycarbonate PC,(C15H16O2)n,Polymer,Thermoplastic,1.2,0.2,55.0,65.0,2.6,,65.0,100000000000000.0,,Curated,,420.15,401.15,260.0,320.0,0.0
+Polypropylene PP,(C3H6)n,Polymer,Thermoplastic,0.9,0.22,30.0,35.0,1.4,,100.0,100000000000000.0,,Curated,,263.15,333.15,220.0,250.0,50.0
+Ultem PEI,(C37H24N2O6)n,Polymer,Thermoplastic,1.27,0.22,105.0,105.0,3.3,,56.0,1000000000000000.0,,Curated,,490.15,473.15,340.0,390.0,0.0

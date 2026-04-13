@@ -1,0 +1,10 @@
+name,formula,glass_transition_temp,heat_deflection_temp,processing_temp_min_c,processing_temp_max_c,crystallinity,source
+PLA,PLA,333.15,328.15,190,220,10,Curated Datasheet
+PETG,PETG,353.15,343.15,230,260,0,Curated Datasheet
+ABS,ABS,378.15,368.15,230,260,0,Curated Datasheet
+PEEK,PEEK,416.15,433.15,360,410,30,Curated Datasheet
+Nylon 6/6 PA66,PA66,323.15,343.15,250,290,35,Curated Datasheet
+Polycarbonate PC,PC,420.15,401.15,260,320,0,Curated Datasheet
+Polypropylene PP,PP,263.15,333.15,220,250,50,Curated Datasheet
+Ultem PEI,PEI,490.15,473.15,340,390,0,Curated Datasheet
+PTFE Teflon,PTFE,388.15,380.15,340,380,95,Curated Datasheet
