@@ -28,8 +28,8 @@ COPY --from=builder /app/met-quest-server .
 COPY data ./data
 
 # Expose port (Cloud Run sets PORT env var)
-ENV PORT=8080
-EXPOSE 8080
+ENV PORT=7860
+EXPOSE 7860
 
 # Run the binary
 CMD ["/app/met-quest-server"]
