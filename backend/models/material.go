@@ -8,6 +8,8 @@ type Material struct {
 	Category              string   `json:"category" db:"category"`
 	Subcategory           *string  `json:"subcategory,omitempty" db:"subcategory"`
 	Density               *float64 `json:"density,omitempty" db:"density"`
+	GlassTransitionTemp   *float64 `json:"glass_transition_temp,omitempty" db:"glass_transition_temp"`
+	HeatDeflectionTemp    *float64 `json:"heat_deflection_temp,omitempty" db:"heat_deflection_temp"`
 	MeltingPoint          *float64 `json:"melting_point,omitempty" db:"melting_point"`
 	BoilingPoint          *float64 `json:"boiling_point,omitempty" db:"boiling_point"`
 	ThermalConductivity   *float64 `json:"thermal_conductivity,omitempty" db:"thermal_conductivity"`
@@ -19,6 +21,14 @@ type Material struct {
 	YoungsModulus         *float64 `json:"youngs_modulus,omitempty" db:"youngs_modulus"`
 	HardnessVickers       *float64 `json:"hardness_vickers,omitempty" db:"hardness_vickers"`
 	PoissonsRatio         *float64 `json:"poissons_ratio,omitempty" db:"poissons_ratio"`
+	ProcessingTempMinC    *float64 `json:"processing_temp_min_c,omitempty" db:"processing_temp_min_c"`
+	ProcessingTempMaxC    *float64 `json:"processing_temp_max_c,omitempty" db:"processing_temp_max_c"`
+	Crystallinity         *float64 `json:"crystallinity,omitempty" db:"crystallinity"`
+	CrystalSystem         *string  `json:"crystal_system,omitempty" db:"crystal_system"`
+	FractureToughness     *float64 `json:"fracture_toughness,omitempty" db:"fracture_toughness"`
+	WeibullModulus        *float64 `json:"weibull_modulus,omitempty" db:"weibull_modulus"`
+	InterlaminarShear     *float64 `json:"interlaminar_shear_strength,omitempty" db:"interlaminar_shear_strength"`
+	FiberVolumeFraction   *float64 `json:"fiber_volume_fraction,omitempty" db:"fiber_volume_fraction"`
 	Source                string   `json:"source" db:"source"`
 	MpMaterialID          *string  `json:"mp_material_id,omitempty" db:"mp_material_id"`
 }
@@ -38,7 +48,7 @@ type RecommendResponse struct {
 	Query           string     `json:"query"`
 	ExtractedIntent IntentJSON `json:"extracted_intent"`
 	Recommendations []Material `json:"recommendations"`
-	Report          string     `json:"report"`   // Gemini reframed markdown
+	Report          string     `json:"report"` // Gemini reframed markdown
 	TokensUsed      int        `json:"tokens_used,omitempty"`
 }
 
@@ -64,19 +74,19 @@ type PredictRequest struct {
 
 // PredictResponse is the POST /predict response.
 type PredictResponse struct {
-	Composition           map[string]float64  `json:"composition"`
-	PredictedName         string              `json:"predicted_name"`
+	Composition   map[string]float64 `json:"composition"`
+	PredictedName string             `json:"predicted_name"`
 	// Phase 1: Rule-of-mixtures baseline from DB
-	BaselineProperties    map[string]*float64 `json:"baseline_properties,omitempty"`
+	BaselineProperties map[string]*float64 `json:"baseline_properties,omitempty"`
 	// Phase 2: LLM-refined predictions
-	Density               *float64            `json:"density,omitempty"`
-	MeltingPoint          *float64            `json:"melting_point,omitempty"`
-	ThermalConductivity   *float64            `json:"thermal_conductivity,omitempty"`
-	ElectricalResistivity *float64            `json:"electrical_resistivity,omitempty"`
-	YieldStrength         *float64            `json:"yield_strength,omitempty"`
-	YoungsModulus         *float64            `json:"youngs_modulus,omitempty"`
+	Density               *float64 `json:"density,omitempty"`
+	MeltingPoint          *float64 `json:"melting_point,omitempty"`
+	ThermalConductivity   *float64 `json:"thermal_conductivity,omitempty"`
+	ElectricalResistivity *float64 `json:"electrical_resistivity,omitempty"`
+	YieldStrength         *float64 `json:"yield_strength,omitempty"`
+	YoungsModulus         *float64 `json:"youngs_modulus,omitempty"`
 	// LLM-generated content
-	ScientificExplanation string              `json:"scientific_explanation,omitempty"`
-	Method                string              `json:"method"`
-	Notes                 string              `json:"notes,omitempty"`
+	ScientificExplanation string `json:"scientific_explanation,omitempty"`
+	Method                string `json:"method"`
+	Notes                 string `json:"notes,omitempty"`
 }

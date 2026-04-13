@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS materials (
 
     -- Core physical properties
     density                  FLOAT,             -- g/cm³
+    glass_transition_temp    FLOAT,             -- Kelvin (polymers)
+    heat_deflection_temp     FLOAT,             -- Kelvin (polymers)
     melting_point            FLOAT,             -- Kelvin
     boiling_point            FLOAT,             -- Kelvin (if available)
     thermal_conductivity     FLOAT,             -- W/(m·K)
@@ -46,6 +48,8 @@ CREATE TABLE IF NOT EXISTS materials (
 --  Indexes for fast range queries (the RAG retrieval layer)
 -- ----------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_mat_density         ON materials(density);
+CREATE INDEX IF NOT EXISTS idx_mat_tg              ON materials(glass_transition_temp);
+CREATE INDEX IF NOT EXISTS idx_mat_hdt             ON materials(heat_deflection_temp);
 CREATE INDEX IF NOT EXISTS idx_mat_melting_pt       ON materials(melting_point);
 CREATE INDEX IF NOT EXISTS idx_mat_thermal_cond     ON materials(thermal_conductivity);
 CREATE INDEX IF NOT EXISTS idx_mat_resistivity      ON materials(electrical_resistivity);
@@ -57,6 +61,10 @@ CREATE INDEX IF NOT EXISTS idx_mat_formula          ON materials(formula);
 -- Full-text / trigram index for name search
 CREATE INDEX IF NOT EXISTS idx_mat_name_trgm 
     ON materials USING GIN (name gin_trgm_ops);
+
+-- Backward-compatible migration for existing DBs
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS glass_transition_temp FLOAT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS heat_deflection_temp FLOAT;
 
 -- ----------------------------------------------------------------
 --  Query log — track what users ask (useful for evaluation)

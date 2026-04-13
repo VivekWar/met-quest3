@@ -622,6 +622,10 @@ def load_curated_supplement() -> pd.DataFrame:
     df["source"] = "Curated"
     df["mp_material_id"] = None
     df["notes"] = None
+    if "glass_transition_temp" not in df.columns:
+        df["glass_transition_temp"] = None
+    if "heat_deflection_temp" not in df.columns:
+        df["heat_deflection_temp"] = None
     df["boiling_point"] = df.get("boiling_point")
     return df
 
@@ -664,6 +668,8 @@ def build_api_rows(raw_rows: list[dict]) -> pd.DataFrame:
             "category"              : category,
             "subcategory"           : subcategory,
             "density"               : safe_float(r.get("density")),
+            "glass_transition_temp" : None,
+            "heat_deflection_temp"  : None,
             "melting_point"         : None,
             "boiling_point"         : None,
             "thermal_conductivity"  : None,
@@ -693,7 +699,7 @@ def merge_datasets(api_df: pd.DataFrame, curated_df: pd.DataFrame) -> pd.DataFra
     combined.drop_duplicates(subset=["formula"], keep="first", inplace=True)
 
     # Drop rows with NO useful properties
-    prop_cols = ["density","melting_point","thermal_conductivity","electrical_resistivity"]
+    prop_cols = ["density","glass_transition_temp","heat_deflection_temp","melting_point","thermal_conductivity","electrical_resistivity"]
     mask = combined[prop_cols].notna().any(axis=1)
     combined = combined[mask].copy()
 

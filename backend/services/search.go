@@ -20,6 +20,8 @@ func ptr[T any](v T) *T {
 
 var allowedFilterCols = map[string]string{
 	"density":                "density",
+	"glass_transition_temp":  "glass_transition_temp",
+	"heat_deflection_temp":   "heat_deflection_temp",
 	"melting_point":          "melting_point",
 	"thermal_conductivity":   "thermal_conductivity",
 	"electrical_resistivity": "electrical_resistivity",
@@ -105,7 +107,7 @@ func SearchMaterials(ctx context.Context, intent models.IntentJSON, limit int) (
 	query := fmt.Sprintf(`
 		SELECT
 			id, name, formula, category, subcategory,
-			density, melting_point, boiling_point,
+			density, glass_transition_temp, heat_deflection_temp, melting_point, boiling_point,
 			thermal_conductivity, specific_heat, thermal_expansion,
 			electrical_resistivity,
 			yield_strength, tensile_strength, youngs_modulus,
@@ -167,7 +169,7 @@ func LookupElements(ctx context.Context, formulas []string) (map[string]models.M
 func lookupSingle(ctx context.Context, condition string, arg interface{}) (*models.Material, error) {
 	query := fmt.Sprintf(`
 		SELECT id, name, formula, category, subcategory,
-			density, melting_point, boiling_point,
+			density, glass_transition_temp, heat_deflection_temp, melting_point, boiling_point,
 			thermal_conductivity, specific_heat, thermal_expansion,
 			electrical_resistivity,
 			yield_strength, tensile_strength, youngs_modulus,
@@ -201,7 +203,7 @@ func scanMaterials(rows pgx.Rows) ([]models.Material, error) {
 		var m models.Material
 		err := rows.Scan(
 			&m.ID, &m.Name, &m.Formula, &m.Category, &m.Subcategory,
-			&m.Density, &m.MeltingPoint, &m.BoilingPoint,
+			&m.Density, &m.GlassTransitionTemp, &m.HeatDeflectionTemp, &m.MeltingPoint, &m.BoilingPoint,
 			&m.ThermalConductivity, &m.SpecificHeat, &m.ThermalExpansion,
 			&m.ElectricalResistivity,
 			&m.YieldStrength, &m.TensileStrength, &m.YoungsModulus,

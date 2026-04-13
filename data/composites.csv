@@ -1,0 +1,4 @@
+name,formula,category,subcategory,density,thermal_conductivity,yield_strength,tensile_strength,youngs_modulus,hardness_vickers,thermal_expansion,electrical_resistivity,notes,source,mp_material_id,interlaminar_shear_strength,fiber_volume_fraction
+CFRP Unidirectional,C/Epoxy,Composite,PMC,1.55,5.0,,1500.0,135.0,,0.5,1.7e-05,,Curated,,,
+GFRP Woven,SiO2/Epoxy,Composite,PMC,1.8,0.35,,900.0,40.0,,11.0,1000000000000.0,,Curated,,,
+Al-SiC Metal Matrix Composite,Al-SiC,Composite,MMC,2.9,170.0,310.0,400.0,115.0,130.0,12.4,4e-08,,Curated,,,

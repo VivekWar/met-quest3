@@ -101,7 +101,7 @@ def seed_materials(conn, df: pd.DataFrame):
     # 1. Prepare Columns and Clean Data
     columns_full = [
         "mp_material_id", "name", "formula", "category", "subcategory",
-        "density", "melting_point", "boiling_point",
+        "density", "glass_transition_temp", "heat_deflection_temp", "melting_point", "boiling_point",
         "thermal_conductivity", "specific_heat", "thermal_expansion",
         "electrical_resistivity",
         "yield_strength", "tensile_strength", "youngs_modulus",
@@ -126,13 +126,15 @@ def seed_materials(conn, df: pd.DataFrame):
             log.info("Executing Bulk UPSERT (Chunking 1000) ...")
             upsert_sql = """
                 INSERT INTO materials (mp_material_id, name, formula, category, subcategory,
-                    density, melting_point, boiling_point, thermal_conductivity,
+                    density, glass_transition_temp, heat_deflection_temp, melting_point, boiling_point, thermal_conductivity,
                     specific_heat, thermal_expansion, electrical_resistivity,
                     yield_strength, tensile_strength, youngs_modulus,
                     hardness_vickers, poissons_ratio, source, notes)
                 VALUES %s
                 ON CONFLICT (mp_material_id) DO UPDATE SET
                     density               = EXCLUDED.density,
+                    glass_transition_temp = EXCLUDED.glass_transition_temp,
+                    heat_deflection_temp  = EXCLUDED.heat_deflection_temp,
                     melting_point         = EXCLUDED.melting_point,
                     thermal_conductivity  = EXCLUDED.thermal_conductivity,
                     electrical_resistivity= EXCLUDED.electrical_resistivity,
