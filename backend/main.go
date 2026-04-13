@@ -35,14 +35,15 @@ func main() {
 		log.Printf("DB connection error: %v", err)
 	}
 
-	// ── Load Material Catalog ──────────────────────────────────────────
 	// Always load CSV into memory as it acts as the high-speed catalog for the AI
 	if err := services.LoadCSVDB(); err != nil {
 		log.Printf("⚠️  CSV Loader warning: %v", err)
-		// If Postgres is also missing, then we fatal
-		if db.Pool == nil {
-			log.Fatalf("Fatal: No database available (Postgres or CSV)")
-		}
+	} else {
+		log.Printf("✅ Material Catalog loaded successfully.")
+	}
+	
+	if db.Pool == nil && len(services.GetAllMaterials()) == 0 {
+		log.Printf("❌ CRITICAL WARNING: No database available (Postgres or CSV). Service will be degraded.")
 	}
 	defer db.Close()
 
