@@ -35,15 +35,18 @@ func main() {
 		log.Printf("DB connection error: %v", err)
 	}
 
-	// Always load CSV into memory as it acts as the high-speed catalog for the AI
-	if err := services.LoadCSVDB(); err != nil {
-		log.Printf("⚠️  CSV Loader warning: %v", err)
-	} else {
-		log.Printf("✅ Material Catalog loaded successfully.")
-	}
+	// ── Load Material Catalog (Background) ─────────────────────────────
+	// We load in a goroutine so the server starts INSTANTLY to satisfy HF health checks
+	go func() {
+		if err := services.LoadCSVDB(); err != nil {
+			log.Printf("⚠️  Background CSV Loader warning: %v", err)
+		} else {
+			log.Printf("✅ Background Material Catalog loaded successfully.")
+		}
+	}()
 	
-	if db.Pool == nil && len(services.GetAllMaterials()) == 0 {
-		log.Printf("❌ CRITICAL WARNING: No database available (Postgres or CSV). Service will be degraded.")
+	if db.Pool == nil {
+		log.Printf("ℹ️  PostgreSQL not connected — operating in High-Speed CSV Mode.")
 	}
 	defer db.Close()
 
