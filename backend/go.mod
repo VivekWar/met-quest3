@@ -1,10 +1,10 @@
 module github.com/vivek/met-quest
 
-go 1.25.6
+go 1.24
 
 require (
-	github.com/gin-gonic/gin v1.12.0
-	github.com/jackc/pgx/v5 v5.9.1
+	github.com/gin-gonic/gin v1.9.1
+	github.com/jackc/pgx/v5 v5.5.5
 	github.com/joho/godotenv v1.5.1
 )
 

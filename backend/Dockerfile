@@ -1,16 +1,18 @@
 # Build stage
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
-# Copy go mod and sum files
-COPY go.mod go.sum ./
+ENV GOTOOLCHAIN=auto
+
+# Copy source code first (needed for go mod tidy to see packages)
+COPY . .
+
+# Synchronize dependencies and regenerate go.sum
+RUN go mod tidy
 
 # Download dependencies
 RUN go mod download
-
-# Copy source code
-COPY . .
 
 # Build the application statically
 RUN CGO_ENABLED=0 GOOS=linux go build -o /app/met-quest-server main.go

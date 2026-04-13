@@ -1,0 +1,747 @@
+#!/usr/bin/env python3
+"""
+fetch_materials.py
+==================
+Fetches engineering materials from The Materials Project REST API (v2)
+using direct HTTP requests — no mp-api library dependency.
+
+Supplements the API data with a comprehensive curated table of
+~70 common engineering materials with full property data.
+
+Requirements:
+    pip install requests pandas python-dotenv tqdm
+
+Usage:
+    export MP_API_KEY=ElqT9XOm6aFVqAKYBcAUfutWr3m5giXf
+    python fetch_materials.py
+
+Output:
+    data/materials_cleaned.csv
+"""
+
+import os
+import sys
+import json
+import time
+import logging
+from pathlib import Path
+from typing import Optional
+
+import requests
+import pandas as pd
+from tqdm import tqdm
+
+# ── Logging ───────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+log = logging.getLogger(__name__)
+
+# ── Config ────────────────────────────────────────────────────────────────
+# Load .env manually (avoid dotenv library issues)
+env_file = Path(__file__).parent.parent / ".env"
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+MP_API_KEY  = os.getenv("MP_API_KEY", "ElqT9XOm6aFVqAKYBcAUfutWr3m5giXf")
+MP_BASE_URL = "https://api.materialsproject.org"
+
+DATA_DIR   = Path(__file__).parent
+RAW_JSON   = DATA_DIR / "materials_raw.json"
+OUTPUT_CSV = DATA_DIR / "materials_cleaned.csv"
+
+# ── API Client ────────────────────────────────────────────────────────────
+class MPRestClient:
+    """Lightweight REST client for the Materials Project v2 API."""
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.session = requests.Session()
+        self.session.headers.update({
+            "X-API-KEY": api_key,
+            "Accept": "application/json",
+            "User-Agent": "MetQuest-SmartAlloySelector/1.0",
+        })
+
+    def get(self, endpoint: str, params: dict = None) -> dict:
+        url = f"{MP_BASE_URL}{endpoint}"
+        for attempt in range(3):
+            try:
+                resp = self.session.get(url, params=params, timeout=30)
+                if resp.status_code == 429:
+                    wait = int(resp.headers.get("Retry-After", 10))
+                    log.warning(f"Rate limited — waiting {wait}s …")
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except requests.HTTPError as e:
+                log.warning(f"HTTP {e.response.status_code} on attempt {attempt+1}: {e}")
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
+            except requests.RequestException as e:
+                log.warning(f"Request error (attempt {attempt+1}): {e}")
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
+        return {}
+
+    def fetch_summary(self, limit: int = 2000) -> list[dict]:
+        """
+        Fetch materials summary data: formula, density, elements.
+        The v2 API paginates with _limit and _skip.
+        """
+        results = []
+        page_size = 100
+        fields = "material_id,formula_pretty,elements,density,symmetry"
+
+        log.info(f"Fetching summary data (target: {limit} materials) …")
+
+        with tqdm(total=limit, desc="Fetching MP API") as pbar:
+            skip = 0
+            while len(results) < limit:
+                batch_size = min(page_size, limit - len(results))
+                data = self.get("/materials/summary/", params={
+                    "_fields": fields,
+                    "_limit": batch_size,
+                    "_skip": skip,
+                })
+
+                items = data.get("data", [])
+                if not items:
+                    log.info(f"No more data after {len(results)} items")
+                    break
+
+                for item in items:
+                    results.append({
+                        "mp_material_id"        : item.get("material_id", ""),
+                        "name"                  : item.get("formula_pretty", ""),
+                        "formula"               : item.get("formula_pretty", ""),
+                        "elements"              : item.get("elements", []),
+                        "density"               : item.get("density"),
+                        "source"                : "Materials Project",
+                    })
+
+                pbar.update(len(items))
+                skip += len(items)
+
+                # Rate-limit friendly
+                time.sleep(0.2)
+
+        log.info(f"Fetched {len(results)} records from MP API")
+        return results
+
+
+# ── Category Classifier ───────────────────────────────────────────────────
+ELEMENT_METALS = {
+    "Li","Be","Na","Mg","Al","K","Ca","Sc","Ti","V","Cr","Mn","Fe",
+    "Co","Ni","Cu","Zn","Ga","Rb","Sr","Y","Zr","Nb","Mo","Tc","Ru",
+    "Rh","Pd","Ag","Cd","In","Sn","Cs","Ba","La","Ce","Pr","Nd","Pm",
+    "Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu","Hf","Ta","W",
+    "Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi"
+}
+CERAMIC_NONMETALS = {"O", "N", "C", "Si", "B", "S", "P", "F", "Cl"}
+SEMICONDUCTOR_ELEMENTS = {"Si", "Ge"}
+
+
+def classify_category(formula: str, elements: list) -> tuple[str, str]:
+    """Returns (category, subcategory)."""
+    if not elements:
+        return "Unknown", None
+
+    elem_set = set(str(e) for e in elements)
+
+    # Single element
+    if len(elem_set) == 1:
+        el = list(elem_set)[0]
+        if el in SEMICONDUCTOR_ELEMENTS:
+            return "Semiconductor", "Elemental"
+        if el in ELEMENT_METALS:
+            # Check if it's refractory
+            refractory = {"W","Mo","Nb","Ta","Re","Hf","Zr","V","Cr","Ti"}
+            return "Metal", "Refractory" if el in refractory else "Non-Ferrous"
+        return "Ceramic", "Carbon" if el == "C" else "Elemental"
+
+    metals_in = elem_set & ELEMENT_METALS
+    nonmetals_in = elem_set & CERAMIC_NONMETALS
+
+    # Iron-based → Ferrous
+    if "Fe" in elem_set and not nonmetals_in - {"C"}:
+        return "Metal", "Ferrous"
+
+    # Mostly metals with no ceramics formers → Metal alloy
+    if metals_in and not nonmetals_in:
+        if "Ni" in elem_set and len(metals_in) > 2:
+            return "Metal", "Superalloy"
+        return "Metal", "Non-Ferrous"
+
+    # Metals + ceramics formers → Ceramic (oxide, nitride, carbide…)
+    if metals_in and nonmetals_in:
+        if "O" in elem_set:
+            return "Ceramic", "Oxide"
+        if "N" in elem_set:
+            return "Ceramic", "Nitride"
+        if "C" in elem_set:
+            return "Ceramic", "Carbide"
+        if "B" in elem_set:
+            return "Ceramic", "Boride"
+        return "Ceramic", "Mixed"
+
+    # All nonmetals
+    if elem_set <= CERAMIC_NONMETALS:
+        return "Ceramic", "Non-Oxide"
+
+    return "Unknown", None
+
+
+def safe_float(val) -> Optional[float]:
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        import math
+        return None if math.isnan(f) else f
+    except (TypeError, ValueError):
+        return None
+
+
+# ── Curated Dataset ───────────────────────────────────────────────────────
+def load_curated_supplement() -> pd.DataFrame:
+    """
+    High-quality curated dataset of common engineering materials.
+    All values from peer-reviewed engineering references (MatWeb, ASM, etc.)
+    """
+    data = [
+        # ── Pure Elements / Metals ──────────────────────────────────────
+        {"name":"Aluminum","formula":"Al","category":"Metal","subcategory":"Non-Ferrous",
+         "density":2.70,"melting_point":933,"boiling_point":2792,
+         "thermal_conductivity":237,"specific_heat":897,"thermal_expansion":23.1,
+         "electrical_resistivity":2.65e-8,"yield_strength":35,"tensile_strength":90,
+         "youngs_modulus":70,"hardness_vickers":17,"poissons_ratio":0.33},
+        {"name":"Copper","formula":"Cu","category":"Metal","subcategory":"Non-Ferrous",
+         "density":8.96,"melting_point":1358,"boiling_point":2835,
+         "thermal_conductivity":401,"specific_heat":385,"thermal_expansion":16.5,
+         "electrical_resistivity":1.68e-8,"yield_strength":70,"tensile_strength":220,
+         "youngs_modulus":120,"hardness_vickers":35,"poissons_ratio":0.34},
+        {"name":"Iron","formula":"Fe","category":"Metal","subcategory":"Ferrous",
+         "density":7.87,"melting_point":1811,"boiling_point":3134,
+         "thermal_conductivity":80,"specific_heat":449,"thermal_expansion":11.8,
+         "electrical_resistivity":9.71e-8,"yield_strength":80,"tensile_strength":400,
+         "youngs_modulus":211,"hardness_vickers":60,"poissons_ratio":0.29},
+        {"name":"Titanium","formula":"Ti","category":"Metal","subcategory":"Non-Ferrous",
+         "density":4.51,"melting_point":1941,"boiling_point":3560,
+         "thermal_conductivity":21.9,"specific_heat":520,"thermal_expansion":8.6,
+         "electrical_resistivity":4.20e-7,"yield_strength":140,"tensile_strength":220,
+         "youngs_modulus":116,"hardness_vickers":70,"poissons_ratio":0.32},
+        {"name":"Nickel","formula":"Ni","category":"Metal","subcategory":"Non-Ferrous",
+         "density":8.91,"melting_point":1728,"boiling_point":3003,
+         "thermal_conductivity":91,"specific_heat":444,"thermal_expansion":13.4,
+         "electrical_resistivity":6.99e-8,"yield_strength":59,"tensile_strength":317,
+         "youngs_modulus":200,"hardness_vickers":64,"poissons_ratio":0.31},
+        {"name":"Zinc","formula":"Zn","category":"Metal","subcategory":"Non-Ferrous",
+         "density":7.13,"melting_point":693,"boiling_point":1180,
+         "thermal_conductivity":116,"specific_heat":388,"thermal_expansion":30.2,
+         "electrical_resistivity":5.96e-8,"yield_strength":37,"tensile_strength":100,
+         "youngs_modulus":108,"hardness_vickers":30,"poissons_ratio":0.25},
+        {"name":"Lead","formula":"Pb","category":"Metal","subcategory":"Non-Ferrous",
+         "density":11.34,"melting_point":601,"boiling_point":2022,
+         "thermal_conductivity":35.3,"specific_heat":128,"thermal_expansion":28.9,
+         "electrical_resistivity":2.08e-7,"yield_strength":11,"tensile_strength":17,
+         "youngs_modulus":16,"hardness_vickers":5,"poissons_ratio":0.44},
+        {"name":"Magnesium","formula":"Mg","category":"Metal","subcategory":"Non-Ferrous",
+         "density":1.74,"melting_point":923,"boiling_point":1363,
+         "thermal_conductivity":156,"specific_heat":1020,"thermal_expansion":25.2,
+         "electrical_resistivity":4.39e-8,"yield_strength":20,"tensile_strength":165,
+         "youngs_modulus":45,"hardness_vickers":30,"poissons_ratio":0.29},
+        {"name":"Silver","formula":"Ag","category":"Metal","subcategory":"Precious",
+         "density":10.49,"melting_point":1235,"boiling_point":2435,
+         "thermal_conductivity":429,"specific_heat":235,"thermal_expansion":18.9,
+         "electrical_resistivity":1.59e-8,"yield_strength":55,"tensile_strength":170,
+         "youngs_modulus":83,"hardness_vickers":25,"poissons_ratio":0.37},
+        {"name":"Gold","formula":"Au","category":"Metal","subcategory":"Precious",
+         "density":19.32,"melting_point":1337,"boiling_point":3129,
+         "thermal_conductivity":318,"specific_heat":129,"thermal_expansion":14.2,
+         "electrical_resistivity":2.44e-8,"yield_strength":100,"tensile_strength":120,
+         "youngs_modulus":79,"hardness_vickers":25,"poissons_ratio":0.44},
+        {"name":"Chromium","formula":"Cr","category":"Metal","subcategory":"Refractory",
+         "density":7.19,"melting_point":2180,"boiling_point":2944,
+         "thermal_conductivity":94,"specific_heat":449,"thermal_expansion":4.9,
+         "electrical_resistivity":1.25e-7,"yield_strength":279,"tensile_strength":418,
+         "youngs_modulus":248,"hardness_vickers":1060,"poissons_ratio":0.21},
+        {"name":"Tungsten","formula":"W","category":"Metal","subcategory":"Refractory",
+         "density":19.25,"melting_point":3695,"boiling_point":5828,
+         "thermal_conductivity":173,"specific_heat":134,"thermal_expansion":4.5,
+         "electrical_resistivity":5.28e-8,"yield_strength":750,"tensile_strength":1500,
+         "youngs_modulus":411,"hardness_vickers":360,"poissons_ratio":0.28},
+        {"name":"Molybdenum","formula":"Mo","category":"Metal","subcategory":"Refractory",
+         "density":10.28,"melting_point":2896,"boiling_point":4912,
+         "thermal_conductivity":138,"specific_heat":251,"thermal_expansion":4.8,
+         "electrical_resistivity":5.34e-8,"yield_strength":324,"tensile_strength":630,
+         "youngs_modulus":329,"hardness_vickers":230,"poissons_ratio":0.31},
+        {"name":"Platinum","formula":"Pt","category":"Metal","subcategory":"Precious",
+         "density":21.45,"melting_point":2041,"boiling_point":4098,
+         "thermal_conductivity":72,"specific_heat":133,"thermal_expansion":8.8,
+         "electrical_resistivity":1.05e-7,"yield_strength":95,"tensile_strength":125,
+         "youngs_modulus":168,"hardness_vickers":56,"poissons_ratio":0.38},
+        {"name":"Cobalt","formula":"Co","category":"Metal","subcategory":"Non-Ferrous",
+         "density":8.90,"melting_point":1768,"boiling_point":3200,
+         "thermal_conductivity":100,"specific_heat":421,"thermal_expansion":13.0,
+         "electrical_resistivity":6.24e-8,"yield_strength":276,"tensile_strength":760,
+         "youngs_modulus":209,"hardness_vickers":1043,"poissons_ratio":0.31},
+        {"name":"Tin","formula":"Sn","category":"Metal","subcategory":"Non-Ferrous",
+         "density":7.26,"melting_point":505,"boiling_point":2875,
+         "thermal_conductivity":67,"specific_heat":228,"thermal_expansion":22.0,
+         "electrical_resistivity":1.15e-7,"yield_strength":14,"tensile_strength":23,
+         "youngs_modulus":50,"hardness_vickers":5,"poissons_ratio":0.36},
+        {"name":"Vanadium","formula":"V","category":"Metal","subcategory":"Refractory",
+         "density":6.11,"melting_point":2183,"boiling_point":3680,
+         "thermal_conductivity":31,"specific_heat":489,"thermal_expansion":8.4,
+         "electrical_resistivity":1.97e-7,"yield_strength":220,"tensile_strength":310,
+         "youngs_modulus":128,"hardness_vickers":628,"poissons_ratio":0.37},
+        {"name":"Niobium","formula":"Nb","category":"Metal","subcategory":"Refractory",
+         "density":8.57,"melting_point":2750,"boiling_point":5017,
+         "thermal_conductivity":54,"specific_heat":265,"thermal_expansion":7.3,
+         "electrical_resistivity":1.52e-7,"yield_strength":105,"tensile_strength":275,
+         "youngs_modulus":105,"hardness_vickers":132,"poissons_ratio":0.40},
+        {"name":"Tantalum","formula":"Ta","category":"Metal","subcategory":"Refractory",
+         "density":16.65,"melting_point":3290,"boiling_point":5731,
+         "thermal_conductivity":57,"specific_heat":140,"thermal_expansion":6.3,
+         "electrical_resistivity":1.31e-7,"yield_strength":170,"tensile_strength":270,
+         "youngs_modulus":186,"hardness_vickers":873,"poissons_ratio":0.34},
+        {"name":"Palladium","formula":"Pd","category":"Metal","subcategory":"Precious",
+         "density":12.02,"melting_point":1828,"boiling_point":3236,
+         "thermal_conductivity":72,"specific_heat":246,"thermal_expansion":11.8,
+         "electrical_resistivity":1.08e-7,"yield_strength":53,"tensile_strength":180,
+         "youngs_modulus":121,"hardness_vickers":37,"poissons_ratio":0.39},
+        {"name":"Beryllium","formula":"Be","category":"Metal","subcategory":"Non-Ferrous",
+         "density":1.85,"melting_point":1560,"boiling_point":2742,
+         "thermal_conductivity":200,"specific_heat":1825,"thermal_expansion":11.3,
+         "electrical_resistivity":4e-8,"yield_strength":240,"tensile_strength":400,
+         "youngs_modulus":287,"hardness_vickers":130,"poissons_ratio":0.08},
+        {"name":"Rhenium","formula":"Re","category":"Metal","subcategory":"Refractory",
+         "density":21.02,"melting_point":3459,"boiling_point":5869,
+         "thermal_conductivity":48,"specific_heat":138,"thermal_expansion":6.7,
+         "electrical_resistivity":1.93e-7,"yield_strength":290,"tensile_strength":1170,
+         "youngs_modulus":463,"hardness_vickers":2450,"poissons_ratio":0.30},
+        {"name":"Hafnium","formula":"Hf","category":"Metal","subcategory":"Refractory",
+         "density":13.31,"melting_point":2506,"boiling_point":4876,
+         "thermal_conductivity":23,"specific_heat":144,"thermal_expansion":5.9,
+         "electrical_resistivity":3.31e-7,"yield_strength":None,"tensile_strength":485,
+         "youngs_modulus":141,"hardness_vickers":None,"poissons_ratio":0.37},
+        {"name":"Zirconium","formula":"Zr","category":"Metal","subcategory":"Refractory",
+         "density":6.51,"melting_point":2128,"boiling_point":4682,
+         "thermal_conductivity":22.7,"specific_heat":278,"thermal_expansion":5.7,
+         "electrical_resistivity":4.21e-7,"yield_strength":45,"tensile_strength":170,
+         "youngs_modulus":88,"hardness_vickers":None,"poissons_ratio":0.34},
+        # ── Engineering Alloys ──────────────────────────────────────────
+        {"name":"Steel AISI 1020","formula":"Fe-C","category":"Metal","subcategory":"Ferrous",
+         "density":7.85,"melting_point":1773,"boiling_point":None,
+         "thermal_conductivity":51,"specific_heat":486,"thermal_expansion":12.0,
+         "electrical_resistivity":1.60e-7,"yield_strength":380,"tensile_strength":470,
+         "youngs_modulus":200,"hardness_vickers":130,"poissons_ratio":0.29},
+        {"name":"Steel AISI 4340","formula":"Fe-Ni-Cr-Mo","category":"Metal","subcategory":"Ferrous",
+         "density":7.85,"melting_point":1705,"boiling_point":None,
+         "thermal_conductivity":44,"specific_heat":475,"thermal_expansion":12.3,
+         "electrical_resistivity":2.48e-7,"yield_strength":793,"tensile_strength":1000,
+         "youngs_modulus":205,"hardness_vickers":300,"poissons_ratio":0.29},
+        {"name":"Stainless Steel 304","formula":"Fe-Cr-Ni","category":"Metal","subcategory":"Ferrous",
+         "density":8.00,"melting_point":1673,"boiling_point":None,
+         "thermal_conductivity":16,"specific_heat":500,"thermal_expansion":17.2,
+         "electrical_resistivity":7.20e-7,"yield_strength":215,"tensile_strength":505,
+         "youngs_modulus":193,"hardness_vickers":129,"poissons_ratio":0.29},
+        {"name":"Stainless Steel 316","formula":"Fe-Cr-Ni-Mo","category":"Metal","subcategory":"Ferrous",
+         "density":8.00,"melting_point":1648,"boiling_point":None,
+         "thermal_conductivity":16,"specific_heat":500,"thermal_expansion":16.0,
+         "electrical_resistivity":7.40e-7,"yield_strength":290,"tensile_strength":580,
+         "youngs_modulus":193,"hardness_vickers":170,"poissons_ratio":0.27},
+        {"name":"Stainless Steel 316L","formula":"Fe-Cr-Ni-Mo-C","category":"Metal","subcategory":"Ferrous",
+         "density":8.00,"melting_point":1648,"boiling_point":None,
+         "thermal_conductivity":16,"specific_heat":500,"thermal_expansion":16.0,
+         "electrical_resistivity":7.40e-7,"yield_strength":170,"tensile_strength":485,
+         "youngs_modulus":193,"hardness_vickers":150,"poissons_ratio":0.27},
+        {"name":"Duplex Steel 2205","formula":"Fe-Cr-Ni-Mo-N","category":"Metal","subcategory":"Ferrous",
+         "density":7.78,"melting_point":1475,"boiling_point":None,
+         "thermal_conductivity":19,"specific_heat":500,"thermal_expansion":13.7,
+         "electrical_resistivity":8.50e-7,"yield_strength":450,"tensile_strength":620,
+         "youngs_modulus":200,"hardness_vickers":290,"poissons_ratio":0.30},
+        {"name":"Brass 70Cu-30Zn","formula":"Cu-Zn","category":"Metal","subcategory":"Non-Ferrous",
+         "density":8.53,"melting_point":1178,"boiling_point":None,
+         "thermal_conductivity":120,"specific_heat":380,"thermal_expansion":19.9,
+         "electrical_resistivity":6.20e-8,"yield_strength":200,"tensile_strength":500,
+         "youngs_modulus":105,"hardness_vickers":160,"poissons_ratio":0.34},
+        {"name":"Bronze 90Cu-10Sn","formula":"Cu-Sn","category":"Metal","subcategory":"Non-Ferrous",
+         "density":8.78,"melting_point":1223,"boiling_point":None,
+         "thermal_conductivity":50,"specific_heat":380,"thermal_expansion":18.0,
+         "electrical_resistivity":1.30e-7,"yield_strength":195,"tensile_strength":350,
+         "youngs_modulus":110,"hardness_vickers":100,"poissons_ratio":0.34},
+        {"name":"Cupronickel 90-10","formula":"Cu-Ni","category":"Metal","subcategory":"Non-Ferrous",
+         "density":8.90,"melting_point":1468,"boiling_point":None,
+         "thermal_conductivity":45,"specific_heat":377,"thermal_expansion":17.1,
+         "electrical_resistivity":1.90e-7,"yield_strength":105,"tensile_strength":300,
+         "youngs_modulus":150,"hardness_vickers":80,"poissons_ratio":0.35},
+        {"name":"Aluminum 6061-T6","formula":"Al-Mg-Si","category":"Metal","subcategory":"Non-Ferrous",
+         "density":2.70,"melting_point":855,"boiling_point":None,
+         "thermal_conductivity":167,"specific_heat":896,"thermal_expansion":23.6,
+         "electrical_resistivity":3.99e-8,"yield_strength":276,"tensile_strength":310,
+         "youngs_modulus":69,"hardness_vickers":107,"poissons_ratio":0.33},
+        {"name":"Aluminum 7075-T6","formula":"Al-Zn-Mg-Cu","category":"Metal","subcategory":"Non-Ferrous",
+         "density":2.81,"melting_point":750,"boiling_point":None,
+         "thermal_conductivity":130,"specific_heat":960,"thermal_expansion":23.4,
+         "electrical_resistivity":5.15e-8,"yield_strength":503,"tensile_strength":572,
+         "youngs_modulus":72,"hardness_vickers":175,"poissons_ratio":0.33},
+        {"name":"Aluminum 2024-T3","formula":"Al-Cu-Mg","category":"Metal","subcategory":"Non-Ferrous",
+         "density":2.78,"melting_point":911,"boiling_point":None,
+         "thermal_conductivity":121,"specific_heat":875,"thermal_expansion":23.2,
+         "electrical_resistivity":5.82e-8,"yield_strength":345,"tensile_strength":483,
+         "youngs_modulus":73,"hardness_vickers":130,"poissons_ratio":0.33},
+        {"name":"Ti-6Al-4V (Grade 5)","formula":"Ti-Al-V","category":"Metal","subcategory":"Non-Ferrous",
+         "density":4.43,"melting_point":1877,"boiling_point":None,
+         "thermal_conductivity":6.7,"specific_heat":560,"thermal_expansion":8.6,
+         "electrical_resistivity":1.71e-6,"yield_strength":880,"tensile_strength":950,
+         "youngs_modulus":114,"hardness_vickers":349,"poissons_ratio":0.34},
+        {"name":"Ti-3Al-2.5V","formula":"Ti-Al-V","category":"Metal","subcategory":"Non-Ferrous",
+         "density":4.48,"melting_point":1883,"boiling_point":None,
+         "thermal_conductivity":7.5,"specific_heat":544,"thermal_expansion":8.6,
+         "electrical_resistivity":1.57e-6,"yield_strength":585,"tensile_strength":690,
+         "youngs_modulus":107,"hardness_vickers":250,"poissons_ratio":0.33},
+        {"name":"Inconel 718","formula":"Ni-Cr-Fe-Nb","category":"Metal","subcategory":"Superalloy",
+         "density":8.19,"melting_point":1609,"boiling_point":None,
+         "thermal_conductivity":11.2,"specific_heat":435,"thermal_expansion":13.0,
+         "electrical_resistivity":1.25e-6,"yield_strength":1034,"tensile_strength":1241,
+         "youngs_modulus":200,"hardness_vickers":350,"poissons_ratio":0.29},
+        {"name":"Inconel 625","formula":"Ni-Cr-Mo-Nb","category":"Metal","subcategory":"Superalloy",
+         "density":8.44,"melting_point":1623,"boiling_point":None,
+         "thermal_conductivity":9.8,"specific_heat":410,"thermal_expansion":12.8,
+         "electrical_resistivity":1.29e-6,"yield_strength":415,"tensile_strength":930,
+         "youngs_modulus":207,"hardness_vickers":200,"poissons_ratio":0.28},
+        {"name":"Hastelloy C-276","formula":"Ni-Mo-Cr","category":"Metal","subcategory":"Superalloy",
+         "density":8.89,"melting_point":1598,"boiling_point":None,
+         "thermal_conductivity":10.2,"specific_heat":427,"thermal_expansion":11.2,
+         "electrical_resistivity":1.25e-6,"yield_strength":414,"tensile_strength":790,
+         "youngs_modulus":205,"hardness_vickers":210,"poissons_ratio":0.30},
+        {"name":"Monel 400","formula":"Ni-Cu","category":"Metal","subcategory":"Non-Ferrous",
+         "density":8.80,"melting_point":1573,"boiling_point":None,
+         "thermal_conductivity":21.8,"specific_heat":427,"thermal_expansion":13.9,
+         "electrical_resistivity":5.47e-7,"yield_strength":240,"tensile_strength":550,
+         "youngs_modulus":179,"hardness_vickers":130,"poissons_ratio":0.32},
+        {"name":"Nitinol NiTi","formula":"Ni-Ti","category":"Metal","subcategory":"Shape-Memory",
+         "density":6.45,"melting_point":1583,"boiling_point":None,
+         "thermal_conductivity":8.6,"specific_heat":490,"thermal_expansion":11.0,
+         "electrical_resistivity":8.20e-7,"yield_strength":195,"tensile_strength":895,
+         "youngs_modulus":75,"hardness_vickers":250,"poissons_ratio":0.33},
+        {"name":"Solder 60Sn-40Pb","formula":"Sn-Pb","category":"Metal","subcategory":"Non-Ferrous",
+         "density":8.52,"melting_point":456,"boiling_point":None,
+         "thermal_conductivity":50,"specific_heat":168,"thermal_expansion":24.0,
+         "electrical_resistivity":1.5e-7,"yield_strength":None,"tensile_strength":60,
+         "youngs_modulus":32,"hardness_vickers":14,"poissons_ratio":0.40},
+        {"name":"Cast Iron (Gray)","formula":"Fe-C-Si","category":"Metal","subcategory":"Ferrous",
+         "density":7.15,"melting_point":1423,"boiling_point":None,
+         "thermal_conductivity":51,"specific_heat":490,"thermal_expansion":10.8,
+         "electrical_resistivity":1.0e-6,"yield_strength":None,"tensile_strength":250,
+         "youngs_modulus":100,"hardness_vickers":200,"poissons_ratio":0.26},
+        {"name":"Maraging Steel 300","formula":"Fe-Ni-Co-Mo","category":"Metal","subcategory":"Ferrous",
+         "density":8.00,"melting_point":1723,"boiling_point":None,
+         "thermal_conductivity":25,"specific_heat":460,"thermal_expansion":10.4,
+         "electrical_resistivity":6.0e-7,"yield_strength":1900,"tensile_strength":1965,
+         "youngs_modulus":190,"hardness_vickers":600,"poissons_ratio":0.30},
+        # ── Ceramics ────────────────────────────────────────────────────
+        {"name":"Alumina Al2O3 99%","formula":"Al2O3","category":"Ceramic","subcategory":"Oxide",
+         "density":3.95,"melting_point":2345,"boiling_point":3250,
+         "thermal_conductivity":30,"specific_heat":880,"thermal_expansion":8.1,
+         "electrical_resistivity":1e10,"yield_strength":None,"tensile_strength":260,
+         "youngs_modulus":370,"hardness_vickers":1500,"poissons_ratio":0.22},
+        {"name":"Silicon Carbide SiC","formula":"SiC","category":"Ceramic","subcategory":"Carbide",
+         "density":3.21,"melting_point":3003,"boiling_point":None,
+         "thermal_conductivity":120,"specific_heat":750,"thermal_expansion":4.0,
+         "electrical_resistivity":1e4,"yield_strength":None,"tensile_strength":400,
+         "youngs_modulus":410,"hardness_vickers":2800,"poissons_ratio":0.16},
+        {"name":"Silicon Nitride Si3N4","formula":"Si3N4","category":"Ceramic","subcategory":"Nitride",
+         "density":3.19,"melting_point":2173,"boiling_point":None,
+         "thermal_conductivity":25,"specific_heat":700,"thermal_expansion":3.2,
+         "electrical_resistivity":1e12,"yield_strength":None,"tensile_strength":600,
+         "youngs_modulus":300,"hardness_vickers":1700,"poissons_ratio":0.27},
+        {"name":"Zirconia ZrO2 (Stabilized)","formula":"ZrO2","category":"Ceramic","subcategory":"Oxide",
+         "density":6.05,"melting_point":2988,"boiling_point":None,
+         "thermal_conductivity":2.0,"specific_heat":400,"thermal_expansion":10.5,
+         "electrical_resistivity":1e12,"yield_strength":None,"tensile_strength":800,
+         "youngs_modulus":210,"hardness_vickers":1200,"poissons_ratio":0.31},
+        {"name":"Boron Carbide B4C","formula":"B4C","category":"Ceramic","subcategory":"Carbide",
+         "density":2.52,"melting_point":2763,"boiling_point":None,
+         "thermal_conductivity":30,"specific_heat":950,"thermal_expansion":5.0,
+         "electrical_resistivity":0.3,"yield_strength":None,"tensile_strength":350,
+         "youngs_modulus":450,"hardness_vickers":3000,"poissons_ratio":0.17},
+        {"name":"Magnesia MgO","formula":"MgO","category":"Ceramic","subcategory":"Oxide",
+         "density":3.58,"melting_point":3098,"boiling_point":3873,
+         "thermal_conductivity":48,"specific_heat":877,"thermal_expansion":13.5,
+         "electrical_resistivity":1e13,"yield_strength":None,"tensile_strength":100,
+         "youngs_modulus":248,"hardness_vickers":750,"poissons_ratio":0.18},
+        {"name":"Tungsten Carbide WC","formula":"WC","category":"Ceramic","subcategory":"Carbide",
+         "density":15.63,"melting_point":3058,"boiling_point":None,
+         "thermal_conductivity":110,"specific_heat":203,"thermal_expansion":5.5,
+         "electrical_resistivity":2e-7,"yield_strength":None,"tensile_strength":1700,
+         "youngs_modulus":696,"hardness_vickers":2400,"poissons_ratio":0.24},
+        {"name":"Aluminium Nitride AlN","formula":"AlN","category":"Ceramic","subcategory":"Nitride",
+         "density":3.26,"melting_point":2473,"boiling_point":None,
+         "thermal_conductivity":170,"specific_heat":780,"thermal_expansion":4.6,
+         "electrical_resistivity":1e11,"yield_strength":None,"tensile_strength":300,
+         "youngs_modulus":320,"hardness_vickers":1200,"poissons_ratio":0.24},
+        {"name":"Titanium Nitride TiN","formula":"TiN","category":"Ceramic","subcategory":"Nitride",
+         "density":5.22,"melting_point":3220,"boiling_point":None,
+         "thermal_conductivity":19,"specific_heat":616,"thermal_expansion":9.4,
+         "electrical_resistivity":2.5e-7,"yield_strength":None,"tensile_strength":None,
+         "youngs_modulus":600,"hardness_vickers":2100,"poissons_ratio":0.25},
+        {"name":"Titania TiO2 (Rutile)","formula":"TiO2","category":"Ceramic","subcategory":"Oxide",
+         "density":4.26,"melting_point":2116,"boiling_point":None,
+         "thermal_conductivity":8.0,"specific_heat":690,"thermal_expansion":8.2,
+         "electrical_resistivity":1e6,"yield_strength":None,"tensile_strength":100,
+         "youngs_modulus":290,"hardness_vickers":1100,"poissons_ratio":0.27},
+        {"name":"Cordierite Mg2Al4Si5O18","formula":"Mg2Al4Si5O18","category":"Ceramic","subcategory":"Oxide",
+         "density":2.51,"melting_point":1733,"boiling_point":None,
+         "thermal_conductivity":3.5,"specific_heat":790,"thermal_expansion":1.5,
+         "electrical_resistivity":1e12,"yield_strength":None,"tensile_strength":None,
+         "youngs_modulus":135,"hardness_vickers":None,"poissons_ratio":0.25},
+        {"name":"Borosilicate Glass","formula":"SiO2-B2O3","category":"Ceramic","subcategory":"Glass",
+         "density":2.23,"melting_point":1098,"boiling_point":None,
+         "thermal_conductivity":1.2,"specific_heat":830,"thermal_expansion":3.3,
+         "electrical_resistivity":1e8,"yield_strength":None,"tensile_strength":60,
+         "youngs_modulus":63,"hardness_vickers":520,"poissons_ratio":0.20},
+        {"name":"Fused Silica SiO2","formula":"SiO2","category":"Ceramic","subcategory":"Glass",
+         "density":2.20,"melting_point":1983,"boiling_point":None,
+         "thermal_conductivity":1.38,"specific_heat":740,"thermal_expansion":0.55,
+         "electrical_resistivity":1e16,"yield_strength":None,"tensile_strength":50,
+         "youngs_modulus":72,"hardness_vickers":1100,"poissons_ratio":0.17},
+        {"name":"Hydroxyapatite","formula":"Ca10(PO4)6(OH)2","category":"Ceramic","subcategory":"Bioceramic",
+         "density":3.16,"melting_point":1823,"boiling_point":None,
+         "thermal_conductivity":1.3,"specific_heat":700,"thermal_expansion":11.5,
+         "electrical_resistivity":1e10,"yield_strength":None,"tensile_strength":40,
+         "youngs_modulus":117,"hardness_vickers":600,"poissons_ratio":0.28},
+        # ── Semiconductors ───────────────────────────────────────────────
+        {"name":"Silicon","formula":"Si","category":"Semiconductor","subcategory":"Elemental",
+         "density":2.33,"melting_point":1687,"boiling_point":3538,
+         "thermal_conductivity":150,"specific_heat":712,"thermal_expansion":2.6,
+         "electrical_resistivity":640,"yield_strength":None,"tensile_strength":7000,
+         "youngs_modulus":185,"hardness_vickers":1000,"poissons_ratio":0.28},
+        {"name":"Germanium","formula":"Ge","category":"Semiconductor","subcategory":"Elemental",
+         "density":5.32,"melting_point":1211,"boiling_point":3106,
+         "thermal_conductivity":60,"specific_heat":321,"thermal_expansion":5.8,
+         "electrical_resistivity":4.6e-1,"yield_strength":None,"tensile_strength":None,
+         "youngs_modulus":130,"hardness_vickers":692,"poissons_ratio":0.26},
+        {"name":"Gallium Arsenide GaAs","formula":"GaAs","category":"Semiconductor","subcategory":"III-V",
+         "density":5.32,"melting_point":1511,"boiling_point":None,
+         "thermal_conductivity":46,"specific_heat":330,"thermal_expansion":6.0,
+         "electrical_resistivity":1e-3,"yield_strength":None,"tensile_strength":None,
+         "youngs_modulus":86,"hardness_vickers":750,"poissons_ratio":0.31},
+        {"name":"Gallium Nitride GaN","formula":"GaN","category":"Semiconductor","subcategory":"III-V",
+         "density":6.15,"melting_point":2773,"boiling_point":None,
+         "thermal_conductivity":130,"specific_heat":490,"thermal_expansion":5.6,
+         "electrical_resistivity":1e-3,"yield_strength":None,"tensile_strength":None,
+         "youngs_modulus":181,"hardness_vickers":1580,"poissons_ratio":0.35},
+        {"name":"Silicon Carbide 4H-SiC","formula":"SiC","category":"Semiconductor","subcategory":"Wide-Bandgap",
+         "density":3.21,"melting_point":3003,"boiling_point":None,
+         "thermal_conductivity":370,"specific_heat":750,"thermal_expansion":4.2,
+         "electrical_resistivity":1e-2,"yield_strength":None,"tensile_strength":None,
+         "youngs_modulus":694,"hardness_vickers":2800,"poissons_ratio":0.16},
+        # ── Polymers ────────────────────────────────────────────────────
+        {"name":"PTFE Teflon","formula":"(C2F4)n","category":"Polymer","subcategory":"Fluoropolymer",
+         "density":2.20,"melting_point":600,"boiling_point":None,
+         "thermal_conductivity":0.25,"specific_heat":1000,"thermal_expansion":135,
+         "electrical_resistivity":1e16,"yield_strength":None,"tensile_strength":31,
+         "youngs_modulus":0.5,"hardness_vickers":None,"poissons_ratio":0.46},
+        {"name":"PEEK","formula":"(C19H12O3)n","category":"Polymer","subcategory":"Thermoplastic",
+         "density":1.32,"melting_point":616,"boiling_point":None,
+         "thermal_conductivity":0.25,"specific_heat":320,"thermal_expansion":47,
+         "electrical_resistivity":4.9e13,"yield_strength":91,"tensile_strength":100,
+         "youngs_modulus":3.6,"hardness_vickers":None,"poissons_ratio":0.40},
+        {"name":"Nylon 6/6 PA66","formula":"(C12H22N2O2)n","category":"Polymer","subcategory":"Polyamide",
+         "density":1.14,"melting_point":538,"boiling_point":None,
+         "thermal_conductivity":0.25,"specific_heat":1700,"thermal_expansion":80,
+         "electrical_resistivity":1e12,"yield_strength":60,"tensile_strength":83,
+         "youngs_modulus":3.0,"hardness_vickers":None,"poissons_ratio":0.40},
+        {"name":"Polycarbonate PC","formula":"(C15H16O2)n","category":"Polymer","subcategory":"Thermoplastic",
+         "density":1.20,"melting_point":423,"boiling_point":None,
+         "thermal_conductivity":0.20,"specific_heat":1200,"thermal_expansion":65,
+         "electrical_resistivity":1e14,"yield_strength":55,"tensile_strength":65,
+         "youngs_modulus":2.6,"hardness_vickers":None,"poissons_ratio":0.37},
+        {"name":"Polypropylene PP","formula":"(C3H6)n","category":"Polymer","subcategory":"Thermoplastic",
+         "density":0.90,"melting_point":433,"boiling_point":None,
+         "thermal_conductivity":0.22,"specific_heat":1700,"thermal_expansion":100,
+         "electrical_resistivity":1e14,"yield_strength":30,"tensile_strength":35,
+         "youngs_modulus":1.4,"hardness_vickers":None,"poissons_ratio":0.42},
+        {"name":"Ultem PEI","formula":"(C37H24N2O6)n","category":"Polymer","subcategory":"Thermoplastic",
+         "density":1.27,"melting_point":490,"boiling_point":None,
+         "thermal_conductivity":0.22,"specific_heat":1100,"thermal_expansion":56,
+         "electrical_resistivity":1e15,"yield_strength":105,"tensile_strength":105,
+         "youngs_modulus":3.3,"hardness_vickers":None,"poissons_ratio":0.36},
+        # ── Composites ───────────────────────────────────────────────────
+        {"name":"CFRP Unidirectional","formula":"C/Epoxy","category":"Composite","subcategory":"PMC",
+         "density":1.55,"melting_point":None,"boiling_point":None,
+         "thermal_conductivity":5,"specific_heat":1050,"thermal_expansion":0.5,
+         "electrical_resistivity":1.7e-5,"yield_strength":None,"tensile_strength":1500,
+         "youngs_modulus":135,"hardness_vickers":None,"poissons_ratio":0.30},
+        {"name":"GFRP Woven","formula":"SiO2/Epoxy","category":"Composite","subcategory":"PMC",
+         "density":1.80,"melting_point":None,"boiling_point":None,
+         "thermal_conductivity":0.35,"specific_heat":1000,"thermal_expansion":11,
+         "electrical_resistivity":1e12,"yield_strength":None,"tensile_strength":900,
+         "youngs_modulus":40,"hardness_vickers":None,"poissons_ratio":0.25},
+        {"name":"Al-SiC Metal Matrix Composite","formula":"Al-SiC","category":"Composite","subcategory":"MMC",
+         "density":2.90,"melting_point":None,"boiling_point":None,
+         "thermal_conductivity":170,"specific_heat":864,"thermal_expansion":12.4,
+         "electrical_resistivity":4e-8,"yield_strength":310,"tensile_strength":400,
+         "youngs_modulus":115,"hardness_vickers":130,"poissons_ratio":0.30},
+        # ── Special Materials ────────────────────────────────────────────
+        {"name":"Graphite Isotropic","formula":"C","category":"Ceramic","subcategory":"Carbon",
+         "density":1.81,"melting_point":3948,"boiling_point":None,
+         "thermal_conductivity":120,"specific_heat":720,"thermal_expansion":4.0,
+         "electrical_resistivity":1.3e-5,"yield_strength":None,"tensile_strength":50,
+         "youngs_modulus":10,"hardness_vickers":None,"poissons_ratio":0.20},
+        {"name":"Diamond CVD","formula":"C","category":"Ceramic","subcategory":"Carbon",
+         "density":3.51,"melting_point":4300,"boiling_point":None,
+         "thermal_conductivity":2000,"specific_heat":502,"thermal_expansion":1.0,
+         "electrical_resistivity":1e12,"yield_strength":None,"tensile_strength":2800,
+         "youngs_modulus":1000,"hardness_vickers":10000,"poissons_ratio":0.07},
+        {"name":"Graphene (monolayer)","formula":"C","category":"Semiconductor","subcategory":"2D Material",
+         "density":0.77,"melting_point":None,"boiling_point":None,
+         "thermal_conductivity":5000,"specific_heat":700,"thermal_expansion":None,
+         "electrical_resistivity":1e-6,"yield_strength":None,"tensile_strength":130000,
+         "youngs_modulus":1000,"hardness_vickers":None,"poissons_ratio":0.16},
+        {"name":"Aerogel Silica","formula":"SiO2","category":"Ceramic","subcategory":"Nanomaterial",
+         "density":0.10,"melting_point":None,"boiling_point":None,
+         "thermal_conductivity":0.015,"specific_heat":1000,"thermal_expansion":None,
+         "electrical_resistivity":1e12,"yield_strength":None,"tensile_strength":None,
+         "youngs_modulus":0.002,"hardness_vickers":None,"poissons_ratio":None},
+    ]
+
+    df = pd.DataFrame(data)
+    df["source"] = "Curated"
+    df["mp_material_id"] = None
+    df["notes"] = None
+    df["boiling_point"] = df.get("boiling_point")
+    return df
+
+
+# ── Main ──────────────────────────────────────────────────────────────────
+def fetch_from_api() -> list[dict]:
+    """Fetch from Materials Project REST API v2."""
+    client = MPRestClient(MP_API_KEY)
+
+    # Test connection first
+    log.info("Testing API connection …")
+    try:
+        test = client.get("/materials/summary/", params={
+            "_fields": "material_id,formula_pretty,density",
+            "_limit": 1,
+        })
+        if "data" in test:
+            log.info("✅  API connection successful")
+        else:
+            log.warning(f"Unexpected API response: {list(test.keys())}")
+    except Exception as e:
+        log.error(f"API test failed: {e}")
+        return []  # Fall back to curated only
+
+    return client.fetch_summary(limit=15000)
+
+
+def build_api_rows(raw_rows: list[dict]) -> pd.DataFrame:
+    """Convert raw API rows to clean DataFrame."""
+    rows = []
+    for r in raw_rows:
+        elements = r.get("elements", [])
+        formula  = r.get("formula", "") or ""
+        category, subcategory = classify_category(formula, elements)
+
+        rows.append({
+            "mp_material_id"        : r.get("mp_material_id"),
+            "name"                  : formula,
+            "formula"               : formula,
+            "category"              : category,
+            "subcategory"           : subcategory,
+            "density"               : safe_float(r.get("density")),
+            "melting_point"         : None,
+            "boiling_point"         : None,
+            "thermal_conductivity"  : None,
+            "specific_heat"         : None,
+            "thermal_expansion"     : None,
+            "electrical_resistivity": None,
+            "yield_strength"        : None,
+            "tensile_strength"      : None,
+            "youngs_modulus"        : None,
+            "hardness_vickers"      : None,
+            "poissons_ratio"        : None,
+            "source"                : "Materials Project",
+            "notes"                 : None,
+        })
+    return pd.DataFrame(rows)
+
+
+def merge_datasets(api_df: pd.DataFrame, curated_df: pd.DataFrame) -> pd.DataFrame:
+    """Merge API + curated, dedup by formula, curated takes priority."""
+    if api_df.empty:
+        log.info("Using curated data only (no API rows)")
+        return curated_df.copy()
+
+    combined = pd.concat([curated_df, api_df], ignore_index=True)
+
+    # Drop exact formula duplicates (curated first = kept)
+    combined.drop_duplicates(subset=["formula"], keep="first", inplace=True)
+
+    # Drop rows with NO useful properties
+    prop_cols = ["density","melting_point","thermal_conductivity","electrical_resistivity"]
+    mask = combined[prop_cols].notna().any(axis=1)
+    combined = combined[mask].copy()
+
+    combined.reset_index(drop=True, inplace=True)
+    log.info(f"Merged dataset: {len(combined)} materials")
+    return combined
+
+
+def main():
+    log.info("=" * 60)
+    log.info("Smart Alloy Selector — Materials Data Fetcher v2")
+    log.info("=" * 60)
+
+    # 1. Fetch from API
+    api_rows = []
+    if MP_API_KEY:
+        log.info(f"MP API key: {MP_API_KEY[:8]}…")
+        try:
+            api_rows = fetch_from_api()
+        except Exception as e:
+            log.warning(f"API fetch error: {e} — using curated only")
+
+    api_df = build_api_rows(api_rows) if api_rows else pd.DataFrame()
+
+    # 2. Load curated supplement
+    log.info("Loading curated dataset …")
+    curated_df = load_curated_supplement()
+    log.info(f"Curated: {len(curated_df)} materials")
+
+    # 3. Merge
+    final_df = merge_datasets(api_df, curated_df)
+
+    # 4. Save
+    final_df.to_csv(OUTPUT_CSV, index=False)
+    log.info(f"✅  Saved {len(final_df)} rows → {OUTPUT_CSV}")
+
+    # 5. Summary
+    print("\n── Category Breakdown ──────────────────────────────────")
+    print(final_df["category"].value_counts().to_string())
+    print("\n── Source Breakdown ────────────────────────────────────")
+    print(final_df["source"].value_counts().to_string())
+    print("\n── Sample (Curated) ────────────────────────────────────")
+    sample = final_df[final_df["source"]=="Curated"][
+        ["name","category","density","melting_point","thermal_conductivity","youngs_modulus"]
+    ].head(10)
+    print(sample.to_string(index=False))
+    print("────────────────────────────────────────────────────────\n")
+
+
+if __name__ == "__main__":
+    main()

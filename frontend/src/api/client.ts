@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api/v1',
+  baseURL: import.meta.env.VITE_API_URL || 'https://vivekwa-met-quest-api.hf.space/api/v1',
   headers: { 'Content-Type': 'application/json' },
   timeout: 120000, // 120s — long-context Gemini calls can take 60-90s
 })

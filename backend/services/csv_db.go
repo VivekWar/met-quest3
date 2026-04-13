@@ -23,7 +23,7 @@ func GetAllMaterials() []models.Material {
 func LoadCSVDB() error {
 	file, err := os.Open("../data/materials_cleaned.csv")
 	if err != nil {
-		file, err = os.Open("/home/vivek/Met-Quest/data/materials_cleaned.csv")
+		file, err = os.Open("data/materials_cleaned.csv")
 		if err != nil {
 			return fmt.Errorf("could not open CSV: %w", err)
 		}
