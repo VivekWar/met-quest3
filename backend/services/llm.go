@@ -493,8 +493,8 @@ Original engineer's problem statement: "%s"
 CATALOG (All Available Materials - pick ONLY from here):
 %s`, originalQuery, string(catalogJSON))
 
-	// Increased to 8,192 to give the AI plenty of room for extremely long technical reports
-	raw, tokens, err := callGemini(ctx, prompt, 0.1, 8192)
+	// Set to 1500 to stay within current credit limits for OpenRouter failovers
+	raw, tokens, err := callGemini(ctx, prompt, 0.1, 1500)
 	if err != nil {
 		return LongContextLLMResponse{}, 0, fmt.Errorf("long-context LLM call: %w", err)
 	}
