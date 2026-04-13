@@ -278,46 +278,31 @@ func cleanJSON(raw string) string {
 //  1. Intent Extraction
 //
 // ──────────────────────────────────────────────────────────────────────────
-const intentSystemPrompt = `You are a Virtual Materials Scientist.
+const intentSystemPrompt = `### ROLE: Senior Materials Consultant (Industry Veteran)
+### TASK: Extract Hard Constraints and "Real-World" Preferences.
 
-Your job is to extract structured constraints from a user query.
+Your goal is to parse the query like a human engineer who cares more about "can we actually build this?" than theoretical perfection.
 
-IMPORTANT:
-- Return ONLY valid JSON
-- NO explanation
-- NO markdown
-- NO extra text
+### LOGIC:
+1. **The Feasibility First Rule**: Identify "Practicality" keywords.
+   - "Cheap/Low cost" -> prioritize: unit_cost
+   - "Common/Off-the-shelf" -> prioritize: availability
+   - "Easy to work with" -> prioritize: machinability/formability
+2. **Flexibility**: If the user is vague, assume a "High Flexibility" state. We are not looking for a single point, but a range that makes sense for manufacturing.
+3. **Unit Conversion**: Normalize all units (C to K, etc.).
 
----
-
-LOGIC:
-
-1. Infer material class (Metal, Polymer, Ceramic, Composite)
-2. Based on class, extract ONLY relevant properties:
-
-- Polymer → Tg, density, strength
-- Metal → yield_strength, melting_point, density
-- Ceramic → melting_point, hardness
-- Composite → strength, density
-
-3. If temperature is given:
-- For polymers → map to Tg constraint
-- For metals/ceramics → map to melting_point
-
----
-
-OUTPUT FORMAT:
-
+### OUTPUT FORMAT (JSON ONLY):
 {
+  "category": "Metal|Polymer|Ceramic|Composite|null",
   "filters": {
-    "<property>": {"min": number|null, "max": number|null}
+    "property_name": {"min": float|null, "max": float|null}
   },
-  "category": "<Metal|Polymer|Ceramic|Composite|null>",
-  "sort_by": "<property|null>",
-  "sort_dir": "<ASC|DESC>"
+  "feasibility_priorities": ["cost", "machinability", "availability", "corrosion_resistance"],
+  "flexibility_score": 1-10,
+  "sort_by": "feasibility"
 }
 
-Return ONLY JSON.`
+Return JSON only. Do not include markdown code fences or extra text.`
 
 // ExtractIntent parses a natural language query into structured filters.
 func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, error) {
@@ -347,45 +332,49 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 //  Long-Context AI Engine (Replaces RAG Intent Extraction filter)
 // ──────────────────────────────────────────────────────────────────────────
 
-const longContextSystemPrompt = `You are a Virtual Materials Scientist.
+const longContextSystemPrompt = `### ROLE: Principal Materials Scientist (25+ Years Experience)
+### PHILOSOPHY: "The best material is the one we can actually use."
 
-Select top 3 materials from given catalog.
+You are evaluating a catalog. While property matching (strength, temp) is necessary, Feasibility is your primary ranking factor. A "perfect" material on paper that is impossible to manufacture is a failure.
 
-IMPORTANT:
-- Follow engineering reasoning internally
-- Return ONLY valid JSON
-- NO explanation outside JSON
+### EVALUATION STEPS (The Human-Engineered Approach):
 
----
+1. **The 'Sanity Check' (Feasibility Filter)**:
+	 - Before looking at strength, look at the "Processing" requirements.
+	 - Is it too brittle to machine? Is it a specialty alloy with a 1-year lead time?
+	 - **Weighting**: Give Feasibility 60% of the total score, and Property Matching 40%.
 
-RULES:
+2. **The "Good Enough" Logic**:
+	 - If Material A meets the strength requirement by 110% but is easy to weld, and Material B meets it by 500% but is impossible to join, pick Material A.
 
-1. Identify material class(es)
-2. Evaluate ONLY relevant properties:
+3. **Trade-off Nuance**:
+	 - Acknowledge the "Economic Reality." If a material is 2x better but 10x the price, it is not feasible unless it is for high-end aerospace/medical.
 
-- Polymer → Tg, density
-- Metal → strength, melting_point
-- Ceramic → temperature resistance, brittleness
-- Composite → strength-to-weight
-
-3. Do NOT apply irrelevant properties
-4. Reject materials violating constraints
-5. Consider manufacturability and trade-offs
-
----
-
-OUTPUT:
-
+### OUTPUT FORMAT (JSON ONLY):
 {
-  "recommended_ids": [1,2,3],
-  "report": "## 🏆 Recommendation\n..."
+	"recommended_ids": [1, 2, 3],
+	"feasibility_audit": {
+		"manufacturing_ease": "High/Med/Low",
+		"bottlenecks": "What will the shop floor complain about?",
+		"economic_viability": "Is this overkill for the budget?"
+	},
+	"selection_logic": "Explain why the 'Practical' choice won over the 'Theoretical' choice.",
+	"report_markdown": "## 🛠️ Practical Selection Report\\n\\n### 1. Top Pick: [Material]\\n**Why it works:** [Focus on ease of use/cost first, then properties].\\n\\n**Scientific Trade-off:** 'We accepted a lower [Property] to ensure we could actually [Process/Machine] the part.'\\n\\n### 📊 Comparative Viability Matrix\\n| ID | Performance | Feasibility | Final Verdict |\\n|---|---|---|---|\\n..."
 }
 
-Ensure valid JSON. Escape all quotes inside report.`
+Return JSON only. Ensure strings are escaped and do not include markdown code fences or extra text outside JSON.`
 
 type LongContextLLMResponse struct {
-	RecommendedIDs []int  `json:"recommended_ids"`
-	Report         string `json:"report"`
+	RecommendedIDs   []int `json:"recommended_ids"`
+	FeasibilityAudit struct {
+		ManufacturingEase string `json:"manufacturing_ease"`
+		Bottlenecks       string `json:"bottlenecks"`
+		EconomicViability string `json:"economic_viability"`
+	} `json:"feasibility_audit"`
+	SelectionLogic string `json:"selection_logic"`
+	ReportMarkdown string `json:"report_markdown"`
+	LegacyReport   string `json:"report"`
+	Report         string `json:"-"`
 }
 
 // FilterByDomain cleanly separates the 8,000+ db into domain buckets.
@@ -506,6 +495,16 @@ CATALOG (All Available Materials - pick ONLY from here):
 	if err := json.Unmarshal([]byte(repaired), &parsed); err != nil {
 		log.Printf("WARN: LongContext JSON Parse failed: %v\nRaw: %s\nRepaired: %s", err, raw, repaired)
 		return LongContextLLMResponse{Report: "LLM responded with invalid JSON format. See logs."}, tokens, nil
+	}
+
+	if parsed.ReportMarkdown != "" {
+		parsed.Report = parsed.ReportMarkdown
+	} else {
+		parsed.Report = parsed.LegacyReport
+	}
+
+	if parsed.RecommendedIDs == nil {
+		parsed.RecommendedIDs = []int{}
 	}
 
 	return parsed, tokens, nil
