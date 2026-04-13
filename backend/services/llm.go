@@ -278,28 +278,29 @@ func cleanJSON(raw string) string {
 //  1. Intent Extraction
 //
 // ──────────────────────────────────────────────────────────────────────────
-const intentSystemPrompt = `### ROLE: Senior Materials Consultant (Industry Veteran)
-### TASK: Extract Hard Constraints and "Real-World" Preferences.
+const intentSystemPrompt = `### ROLE: Senior Materials Engineer (25+ Years Experience)
+### TASK: Extract Engineering Intent & Manufacturing Constraints.
 
-Your goal is to parse the query like a human engineer who cares more about "can we actually build this?" than theoretical perfection.
+Analyze the query to find the "Hidden Constraints" (Equipment, Environment, Skill level).
 
-### LOGIC:
-1. **The Feasibility First Rule**: Identify "Practicality" keywords.
-   - "Cheap/Low cost" -> prioritize: unit_cost
-   - "Common/Off-the-shelf" -> prioritize: availability
-   - "Easy to work with" -> prioritize: machinability/formability
-2. **Flexibility**: If the user is vague, assume a "High Flexibility" state. We are not looking for a single point, but a range that makes sense for manufacturing.
-3. **Unit Conversion**: Normalize all units (C to K, etc.).
+### EXTRACTION LOGIC:
+1. **The 'Process' Filter**: Identify the manufacturing method (e.g., 3D Printing, CNC, Casting).
+2. **Equipment Constraints**: If the user mentions "Desktop," "Hand-tool," or "Basic," flag this as a 'High Feasibility' requirement.
+3. **Thermal Environment**: Map heat concerns to either a specific degree or a functional state (e.g., "motor heat" ≈ 60-90°C).
+4. **Primary Failure Mode**: What is the user afraid of? (Warping, Melting, Brittle fracture).
 
 ### OUTPUT FORMAT (JSON ONLY):
 {
-  "category": "Metal|Polymer|Ceramic|Composite|null",
-  "filters": {
-    "property_name": {"min": float|null, "max": float|null}
-  },
-  "feasibility_priorities": ["cost", "machinability", "availability", "corrosion_resistance"],
-  "flexibility_score": 1-10,
-  "sort_by": "feasibility"
+	"category": "Metal|Polymer|Ceramic|Composite|null",
+	"filters": {
+		"property_name": {"min": float|null, "max": float|null}
+	},
+	"context": {
+		"process": "e.g., FDM 3D Printing",
+		"equipment_limit": "e.g., No enclosure / Standard nozzle",
+		"primary_concern": "thermal deformation"
+	},
+	"feasibility_weight": 0.8
 }
 
 Return JSON only. Do not include markdown code fences or extra text.`
@@ -332,46 +333,45 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 //  Long-Context AI Engine (Replaces RAG Intent Extraction filter)
 // ──────────────────────────────────────────────────────────────────────────
 
-const longContextSystemPrompt = `### ROLE: Principal Materials Scientist (25+ Years Experience)
-### PHILOSOPHY: "The best material is the one we can actually use."
+const longContextSystemPrompt = `### ROLE: Principal Materials Scientist
+### PHILOSOPHY: Practicality > Theory.
 
-You are evaluating a catalog. While property matching (strength, temp) is necessary, Feasibility is your primary ranking factor. A "perfect" material on paper that is impossible to manufacture is a failure.
+You are reviewing a catalog to solve a specific engineering problem.
 
-### EVALUATION STEPS (The Human-Engineered Approach):
+### THE "VETERAN" REASONING PROCESS:
+1. **Discard the 'Easy but Weak'**: Identify common materials (like PLA) that the user might be tempted to use but will fail.
+2. **Discard the 'Strong but Impossible'**: Identify high-performance materials (like ABS or PEEK) that meet specs but fail the "Feasibility" test (e.g., need for heated enclosures or toxic venting).
+3. **The 'Sweet Spot'**: Select the material that hits the "Pareto Front" of being just strong enough while being the easiest to work with.
 
-1. **The 'Sanity Check' (Feasibility Filter)**:
-	 - Before looking at strength, look at the "Processing" requirements.
-	 - Is it too brittle to machine? Is it a specialty alloy with a 1-year lead time?
-	 - **Weighting**: Give Feasibility 60% of the total score, and Property Matching 40%.
-
-2. **The "Good Enough" Logic**:
-	 - If Material A meets the strength requirement by 110% but is easy to weld, and Material B meets it by 500% but is impossible to join, pick Material A.
-
-3. **Trade-off Nuance**:
-	 - Acknowledge the "Economic Reality." If a material is 2x better but 10x the price, it is not feasible unless it is for high-end aerospace/medical.
-
-### OUTPUT FORMAT (JSON ONLY):
+### OUTPUT FORMAT (STRICT JSON):
 {
-	"recommended_ids": [1, 2, 3],
-	"feasibility_audit": {
-		"manufacturing_ease": "High/Med/Low",
-		"bottlenecks": "What will the shop floor complain about?",
-		"economic_viability": "Is this overkill for the budget?"
+	"recommendation": "Material Name",
+	"properties_retrieved": {
+		"key_stat_1": "Description + Value",
+		"key_stat_2": "Description + Value"
 	},
-	"selection_logic": "Explain why the 'Practical' choice won over the 'Theoretical' choice.",
-	"report_markdown": "## 🛠️ Practical Selection Report\\n\\n### 1. Top Pick: [Material]\\n**Why it works:** [Focus on ease of use/cost first, then properties].\\n\\n**Scientific Trade-off:** 'We accepted a lower [Property] to ensure we could actually [Process/Machine] the part.'\\n\\n### 📊 Comparative Viability Matrix\\n| ID | Performance | Feasibility | Final Verdict |\\n|---|---|---|---|\\n..."
+	"analysis": {
+		"logic": "Directly compare the recommendation against common alternatives (e.g., 'Better than X because...', 'Easier than Y because...')",
+		"feasibility_notes": "Mention specific equipment or environmental factors."
+	},
+	"recommended_ids": [int]
 }
+
+### OUTPUT STYLE INSTRUCTIONS:
+- Use a professional, peer-to-peer tone.
+- In the 'logic' field, use phrases like 'will warp under localized heat' or 'without the toxic fumes.'
+- Do NOT provide a generic list. Be specific to the user's motor/bracket context.
 
 Return JSON only. Ensure strings are escaped and do not include markdown code fences or extra text outside JSON.`
 
 type LongContextLLMResponse struct {
-	RecommendedIDs   []int `json:"recommended_ids"`
-	FeasibilityAudit struct {
-		ManufacturingEase string `json:"manufacturing_ease"`
-		Bottlenecks       string `json:"bottlenecks"`
-		EconomicViability string `json:"economic_viability"`
-	} `json:"feasibility_audit"`
-	SelectionLogic string `json:"selection_logic"`
+	Recommendation      string            `json:"recommendation"`
+	PropertiesRetrieved map[string]string `json:"properties_retrieved"`
+	Analysis            struct {
+		Logic            string `json:"logic"`
+		FeasibilityNotes string `json:"feasibility_notes"`
+	} `json:"analysis"`
+	RecommendedIDs []int  `json:"recommended_ids"`
 	ReportMarkdown string `json:"report_markdown"`
 	LegacyReport   string `json:"report"`
 	Report         string `json:"-"`
@@ -499,8 +499,39 @@ CATALOG (All Available Materials - pick ONLY from here):
 
 	if parsed.ReportMarkdown != "" {
 		parsed.Report = parsed.ReportMarkdown
-	} else {
+	} else if parsed.LegacyReport != "" {
 		parsed.Report = parsed.LegacyReport
+	} else {
+		var b strings.Builder
+		if parsed.Recommendation != "" {
+			b.WriteString("## 🛠️ Practical Selection Report\n\n")
+			b.WriteString("### 1. Top Pick: ")
+			b.WriteString(parsed.Recommendation)
+			b.WriteString("\n")
+		}
+		if len(parsed.PropertiesRetrieved) > 0 {
+			b.WriteString("\n### 2. Properties Retrieved\n")
+			for k, v := range parsed.PropertiesRetrieved {
+				b.WriteString("- ")
+				b.WriteString(k)
+				b.WriteString(": ")
+				b.WriteString(v)
+				b.WriteString("\n")
+			}
+		}
+		if parsed.Analysis.Logic != "" || parsed.Analysis.FeasibilityNotes != "" {
+			b.WriteString("\n### 3. Analysis\n")
+			if parsed.Analysis.Logic != "" {
+				b.WriteString(parsed.Analysis.Logic)
+				b.WriteString("\n")
+			}
+			if parsed.Analysis.FeasibilityNotes != "" {
+				b.WriteString("\n**Feasibility Notes:** ")
+				b.WriteString(parsed.Analysis.FeasibilityNotes)
+				b.WriteString("\n")
+			}
+		}
+		parsed.Report = strings.TrimSpace(b.String())
 	}
 
 	if parsed.RecommendedIDs == nil {
