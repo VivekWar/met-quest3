@@ -8,6 +8,14 @@ pinned: false
 ---
 
 # 🧬 Smart Alloy Selector - Tech Titans (MET-QUEST '26)
+
+## 🚀 Live Production Links
+
+*   **Production Frontend**: [met-quest.web.app](https://met-quest.web.app) (Hosted on Firebase)
+*   **Production API**: [vivekwa-met-quest-api.hf.space](https://vivekwa-met-quest-api.hf.space) (Hosted on Hugging Face Spaces)
+
+---
+
 # Smart Alloy Selector & Material Recommendation: Tech Titans 🚀
 **Needle in the Data-Stack: The AI-Powered Virtual Materials Scientist**
 
