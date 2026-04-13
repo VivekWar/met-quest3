@@ -14,6 +14,17 @@ import (
 )
 
 func main() {
+	// ── Diagnostics ────────────────────────────────────────────────────
+	cwd, _ := os.Getwd()
+	log.Printf("📂 Startup Directory: %s", cwd)
+	if files, err := os.ReadDir("."); err == nil {
+		var names []string
+		for _, f := range files {
+			names = append(names, f.Name())
+		}
+		log.Printf("📁 Root files found: %v", names)
+	}
+
 	// ── Load environment variables ─────────────────────────────────────
 	if err := godotenv.Load("../.env"); err != nil {
 		log.Println("No ../.env file found — using system environment variables")

@@ -21,13 +21,29 @@ func GetAllMaterials() []models.Material {
 
 // LoadCSVDB parses the full CSV into memory for blazing-fast local testing without Postgres
 func LoadCSVDB() error {
-	file, err := os.Open("../data/materials_cleaned.csv")
-	if err != nil {
-		file, err = os.Open("data/materials_cleaned.csv")
-		if err != nil {
-			return fmt.Errorf("could not open CSV: %w", err)
+	paths := []string{
+		"data/materials_cleaned.csv",
+		"/app/data/materials_cleaned.csv",
+		"../data/materials_cleaned.csv",
+		"materials_cleaned.csv",
+	}
+
+	var file *os.File
+	var err error
+	var foundPath string
+
+	for _, p := range paths {
+		file, err = os.Open(p)
+		if err == nil {
+			foundPath = p
+			break
 		}
 	}
+
+	if err != nil {
+		return fmt.Errorf("could not find CSV in any expected paths (%v): %w", paths, err)
+	}
+	log.Printf("📂 CSV Loader: Successfully opened %s", foundPath)
 	defer file.Close()
 
 	reader := csv.NewReader(file)
