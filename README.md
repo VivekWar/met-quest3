@@ -137,6 +137,23 @@ If you wish to re-ingest data or scale to a cloud-based PostgreSQL:
 
 ---
 
+## ☁️ Production Deployment (Free)
+
+### Backend: Render.com
+To host the Go backend for free without a credit card:
+1. Connect your GitHub to **[Render.com](https://render.com)**.
+2. Create a new **Web Service** and select this repository.
+3. Set the **Runtime** to `Docker`.
+4. Add an Environment Variable: `OPENROUTER_API_KEY`.
+
+### Frontend: Firebase Hosting
+The frontend is hosted on Firebase:
+```bash
+firebase deploy --only hosting
+```
+
+---
+
 ## 🏆 Development Team
 Designed and Engineered for **MET-QUEST ’26**. 
 - **Team**: Tech Titans
