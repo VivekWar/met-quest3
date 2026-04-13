@@ -85,10 +85,14 @@ For alloys not in the database:
 ## 🚀 Setup & Execution
 
 ### 1. Environment Variables
-The system is **Plug-and-Play**. You only need ONE of the following keys for the AI to work:
+The system is **AI-Native**. You only need ONE of the following keys:
 
-- **Option A (Hugging Face / OpenRouter)**: Set `OPENROUTER_API_KEY` in your Space Settings.
-- **Option B (Direct Google Gemini)**: If you have a **Google AI Studio** key (starting with `AIza`), just paste it into the `OPENROUTER_API_KEY` field! The system will automatically detect it and skip the proxy.
+- **Option A (Direct Google AI Studio)**: Set `GEMINI_API_KEY` (highly recommended!).
+- **Option B (Proxy via OpenRouter)**: If you use OpenRouter, you can set `GEMINI_API_KEY` to your OpenRouter key, or keep the legacy `OPENROUTER_API_KEY`.
+
+#### 🔑 Where to get your key:
+- **Google AI Studio**: Go to **[aistudio.google.com](https://aistudio.google.com/)** and click "Get API Key". It's free and fast!
+- **OpenRouter**: Go to **[openrouter.ai](https://openrouter.ai/)**.
 
 #### 🔑 How to get an OpenRouter API Key:
 1. Go to **[openrouter.ai](https://openrouter.ai/)**.

@@ -76,9 +76,13 @@ type googleAIResponse struct {
 // ──────────────────────────────────────────────────────────────────────────
 
 func callGemini(ctx context.Context, prompt string, temperature float64, maxTokens int) (string, int, error) {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENROUTER_API_KEY")
+	}
+
 	if apiKey == "" || strings.Contains(apiKey, "Dummy") {
-		log.Println("⚠️  API_KEY is missing/dummy. Using MOCK AI response.")
+		log.Println("⚠️  No API Key found (GEMINI_API_KEY or OPENROUTER_API_KEY). Using MOCK AI response.")
 
 		// Very basic heuristics for demo
 		if strings.Contains(prompt, "Virtual Materials Scientist") {
