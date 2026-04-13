@@ -278,35 +278,65 @@ func cleanJSON(raw string) string {
 //  1. Intent Extraction
 //
 // ──────────────────────────────────────────────────────────────────────────
-const intentSystemPrompt = `### ROLE: Senior Materials Engineer (25+ Years Experience)
-### TASK: Extract Engineering Intent & Manufacturing Constraints.
+const intentSystemPrompt = `### ROLE: Principal Materials Systems Architect (Specialist in Requirement Engineering)
+### TASK: Structural Intent Decomposition & Constraint Mapping
 
-Analyze the query to find the "Hidden Constraints" (Equipment, Environment, Skill level).
+You are a senior engineer at a top-tier materials laboratory. Your job is to translate messy, non-technical user queries into a precise, searchable JSON schema for a high-fidelity materials database.
 
-### EXTRACTION LOGIC:
-1. **The 'Process' Filter**: Identify the manufacturing method (e.g., 3D Printing, CNC, Casting).
-2. **Equipment Constraints**: If the user mentions "Desktop," "Hand-tool," or "Basic," flag this as a 'High Feasibility' requirement.
-3. **Thermal Environment**: Map heat concerns to either a specific degree or a functional state (e.g., "motor heat" ≈ 60-90°C).
-4. **Primary Failure Mode**: What is the user afraid of? (Warping, Melting, Brittle fracture).
+### 1. SCIENTIFIC TAXONOMY & METRIC SELECTION
+You must dynamically assign the "Search Priority" based on the material class:
+- **POLYMERS**: Priority = $T_g$ (Glass Transition), HDT (Heat Deflection), and Viscoelastic Modulus. *Note: Ignore $T_m$ (Melting Point) as a structural limit; it is a processing limit only.*
+- **METALS**: Priority = $\sigma_y$ (Yield Strength), $K_{1c}$ (Fracture Toughness), and Fatigue Limit.
+- **CERAMICS/GLASS**: Priority = Weibull Modulus, Hardness, and Thermal Shock Resistance ($R$).
+- **COMPOSITES**: Priority = Specific Stiffness ($E/\rho$), Interlaminar Shear Strength, and Fiber Volume Fraction.
 
-### OUTPUT FORMAT (JSON ONLY):
+### 2. PRAGMATIC FEASIBILITY FILTERING
+Analyze the "Implicit Manufacturing Context":
+- **"Desktop/Standard"**: Flag as "Low-Energy/Low-Temp" processing. Maximum nozzle temp < 270°C, No heated chamber, No CNC coolant.
+- **"Industrial/Custom"**: Flag as "High-Performance" processing. Allow PEEK, Ultem, Tool Steels.
+- **"Lightweight"**: Map to a search for Performance Indices ($P = \sigma/\rho$ or $P = E/\rho$).
+
+### 3. OUTPUT SCHEMA (STRICT JSON ONLY)
 {
-	"category": "Metal|Polymer|Ceramic|Composite|null",
-	"filters": {
-		"property_name": {"min": float|null, "max": float|null}
+	"material_class": "Metal|Polymer|Ceramic|Composite|null",
+	"search_filters": {
+		"primary_metric": {"field": "string", "min": float|null, "max": float|null, "unit": "SI"},
+		"secondary_metrics": [{"field": "string", "min": float|null}]
 	},
-	"context": {
-		"process": "e.g., FDM 3D Printing",
-		"equipment_limit": "e.g., No enclosure / Standard nozzle",
-		"primary_concern": "thermal deformation"
+	"processing_constraints": {
+		"method": "string",
+		"capability_level": "Hobbyist|Professional|Industrial",
+		"thermal_ceiling_kelvin": float|null
 	},
-	"feasibility_weight": 0.8
+	"physics_notes": "A 1-sentence technical justification for these specific limits."
 }
 
 Return JSON only. Do not include markdown code fences or extra text.`
 
 // ExtractIntent parses a natural language query into structured filters.
 func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, error) {
+	type intentLLMResponse struct {
+		MaterialClass string `json:"material_class"`
+		SearchFilters struct {
+			PrimaryMetric struct {
+				Field string   `json:"field"`
+				Min   *float64 `json:"min"`
+				Max   *float64 `json:"max"`
+				Unit  string   `json:"unit"`
+			} `json:"primary_metric"`
+			SecondaryMetrics []struct {
+				Field string   `json:"field"`
+				Min   *float64 `json:"min"`
+			} `json:"secondary_metrics"`
+		} `json:"search_filters"`
+		ProcessingConstraints struct {
+			Method               string   `json:"method"`
+			CapabilityLevel      string   `json:"capability_level"`
+			ThermalCeilingKelvin *float64 `json:"thermal_ceiling_kelvin"`
+		} `json:"processing_constraints"`
+		PhysicsNotes string `json:"physics_notes"`
+	}
+
 	prompt := intentSystemPrompt + "\n\nQuery: " + query
 
 	raw, tokens, err := callGemini(ctx, prompt, 0.1, 512)
@@ -318,11 +348,38 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 	cleaned := cleanJSON(raw)
 	repaired := repairJSON(cleaned)
 
-	var intent models.IntentJSON
-	if err := json.Unmarshal([]byte(repaired), &intent); err != nil {
+	var llmIntent intentLLMResponse
+	if err := json.Unmarshal([]byte(repaired), &llmIntent); err != nil {
 		log.Printf("WARN: Failed to parse intent JSON: %v\nRaw: %s\nRepaired: %s", err, raw, repaired)
 		// Return empty intent — search will fall back to a general query
 		return models.IntentJSON{}, tokens, nil
+	}
+
+	intent := models.IntentJSON{
+		Filters:  map[string]models.RangeFilter{},
+		Category: llmIntent.MaterialClass,
+	}
+
+	if llmIntent.SearchFilters.PrimaryMetric.Field != "" {
+		intent.Filters[llmIntent.SearchFilters.PrimaryMetric.Field] = models.RangeFilter{Min: llmIntent.SearchFilters.PrimaryMetric.Min, Max: llmIntent.SearchFilters.PrimaryMetric.Max}
+		if llmIntent.SearchFilters.PrimaryMetric.Field == "density" || llmIntent.SearchFilters.PrimaryMetric.Field == "thermal_conductivity" {
+			intent.SortBy = llmIntent.SearchFilters.PrimaryMetric.Field
+			intent.SortDir = "ASC"
+		} else {
+			intent.SortBy = llmIntent.SearchFilters.PrimaryMetric.Field
+			intent.SortDir = "DESC"
+		}
+	}
+
+	for _, metric := range llmIntent.SearchFilters.SecondaryMetrics {
+		if metric.Field == "" {
+			continue
+		}
+		intent.Filters[metric.Field] = models.RangeFilter{Min: metric.Min}
+	}
+
+	if intent.Category == "" || strings.EqualFold(intent.Category, "null") {
+		intent.Category = ""
 	}
 
 	log.Printf("Intent extracted: category=%q sort_by=%q filters=%d", intent.Category, intent.SortBy, len(intent.Filters))
@@ -333,48 +390,49 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 //  Long-Context AI Engine (Replaces RAG Intent Extraction filter)
 // ──────────────────────────────────────────────────────────────────────────
 
-const longContextSystemPrompt = `### ROLE: Principal Materials Scientist
-### PHILOSOPHY: Practicality > Theory.
+const longContextSystemPrompt = `### ROLE: Chief Materials Scientist & Manufacturing Consultant
+### PHILOSOPHY: "Physics is non-negotiable, but Feasibility is the priority."
 
-You are reviewing a catalog to solve a specific engineering problem.
+You are reviewing a catalog of materials retrieved from a RAG system. You must act as a mentor, guiding a junior engineer through a complex selection process.
 
-### THE "VETERAN" REASONING PROCESS:
-1. **Discard the 'Easy but Weak'**: Identify common materials (like PLA) that the user might be tempted to use but will fail.
-2. **Discard the 'Strong but Impossible'**: Identify high-performance materials (like ABS or PEEK) that meet specs but fail the "Feasibility" test (e.g., need for heated enclosures or toxic venting).
-3. **The 'Sweet Spot'**: Select the material that hits the "Pareto Front" of being just strong enough while being the easiest to work with.
+### STAGE 1: THE ASHBY SCREENING (Logic-Gate)
+1. **The 'Hard Limit' Check**: Immediately reject any material where the operating temperature $T_{op} > 0.8 \times T_g$ (for polymers) or $T_{op} > 0.4 \times T_m$ (for metals - Creep concern).
+2. **Manufacturing Sanity Check**: If the user is using a "Standard Desktop Printer," and the material is a high-temp thermoplastic (Ultem, PEEK, PPSU), you MUST reject it regardless of its strength. It is a "Paper Tiger"—strong on a datasheet, impossible on their desk.
+
+### STAGE 2: PERFORMANCE INDEX ANALYSIS
+Calculate the "Merit Index" internally. If the user wants a "Stiff and Light" part, prioritize materials with the highest $E^{1/2}/\rho$ for plates or $E/\rho$ for rods.
+
+### STAGE 3: THE VETERAN'S NARRATIVE (Output Style)
+Provide the response in the following structured format:
+
+1. **The Executive Recommendation**: Identify the "Sweet Spot" material.
+2. **The "Physics Why"**: Use deep scientific terminology. Don't say "it's strong"; say "It exhibits superior dimensional stability due to its high $T_g$ and low coefficient of thermal expansion (CTE)."
+3. **The Comparative Critique**: Explain why you REJECTED common alternatives. (e.g., "While PLA is easier to print, its low $T_g$ of ~60°C makes it a liability near a high-torque motor.")
+4. **Feasibility Audit**: A "Shop Floor" warning. If they choose this, what is the one thing they will struggle with? (e.g., "Hygroscopic nature—must be dried for 4 hours before use.")
 
 ### OUTPUT FORMAT (STRICT JSON):
 {
-	"recommendation": "Material Name",
-	"properties_retrieved": {
-		"key_stat_1": "Description + Value",
-		"key_stat_2": "Description + Value"
-	},
-	"analysis": {
-		"logic": "Directly compare the recommendation against common alternatives (e.g., 'Better than X because...', 'Easier than Y because...')",
-		"feasibility_notes": "Mention specific equipment or environmental factors."
-	},
-	"recommended_ids": [int]
+  "top_candidate": "Material Name",
+  "fundamental_stats": {
+    "stat_name": "Value + Unit (Why it matters in this context)"
+  },
+  "engineering_analysis": "Intensive, first-principles justification.",
+  "alternative_rejection": "Why the obvious/cheap choice will fail.",
+  "feasibility_warning": "Real-world manufacturing advice."
 }
-
-### OUTPUT STYLE INSTRUCTIONS:
-- Use a professional, peer-to-peer tone.
-- In the 'logic' field, use phrases like 'will warp under localized heat' or 'without the toxic fumes.'
-- Do NOT provide a generic list. Be specific to the user's motor/bracket context.
 
 Return JSON only. Ensure strings are escaped and do not include markdown code fences or extra text outside JSON.`
 
 type LongContextLLMResponse struct {
-	Recommendation      string            `json:"recommendation"`
-	PropertiesRetrieved map[string]string `json:"properties_retrieved"`
-	Analysis            struct {
-		Logic            string `json:"logic"`
-		FeasibilityNotes string `json:"feasibility_notes"`
-	} `json:"analysis"`
-	RecommendedIDs []int  `json:"recommended_ids"`
-	ReportMarkdown string `json:"report_markdown"`
-	LegacyReport   string `json:"report"`
-	Report         string `json:"-"`
+	TopCandidate         string            `json:"top_candidate"`
+	FundamentalStats     map[string]string `json:"fundamental_stats"`
+	EngineeringAnalysis  string            `json:"engineering_analysis"`
+	AlternativeRejection string            `json:"alternative_rejection"`
+	FeasibilityWarning   string            `json:"feasibility_warning"`
+	RecommendedIDs       []int             `json:"recommended_ids"`
+	ReportMarkdown       string            `json:"report_markdown"`
+	LegacyReport         string            `json:"report"`
+	Report               string            `json:"-"`
 }
 
 // FilterByDomain cleanly separates the 8,000+ db into domain buckets.
@@ -503,15 +561,15 @@ CATALOG (All Available Materials - pick ONLY from here):
 		parsed.Report = parsed.LegacyReport
 	} else {
 		var b strings.Builder
-		if parsed.Recommendation != "" {
-			b.WriteString("## 🛠️ Practical Selection Report\n\n")
-			b.WriteString("### 1. Top Pick: ")
-			b.WriteString(parsed.Recommendation)
+		if parsed.TopCandidate != "" {
+			b.WriteString("## 🔬 Engineering Analysis Report\n\n")
+			b.WriteString("### 1. Primary Recommendation: ")
+			b.WriteString(parsed.TopCandidate)
 			b.WriteString("\n")
 		}
-		if len(parsed.PropertiesRetrieved) > 0 {
-			b.WriteString("\n### 2. Properties Retrieved\n")
-			for k, v := range parsed.PropertiesRetrieved {
+		if len(parsed.FundamentalStats) > 0 {
+			b.WriteString("\n### 2. Fundamental Stats\n")
+			for k, v := range parsed.FundamentalStats {
 				b.WriteString("- ")
 				b.WriteString(k)
 				b.WriteString(": ")
@@ -519,17 +577,20 @@ CATALOG (All Available Materials - pick ONLY from here):
 				b.WriteString("\n")
 			}
 		}
-		if parsed.Analysis.Logic != "" || parsed.Analysis.FeasibilityNotes != "" {
-			b.WriteString("\n### 3. Analysis\n")
-			if parsed.Analysis.Logic != "" {
-				b.WriteString(parsed.Analysis.Logic)
-				b.WriteString("\n")
-			}
-			if parsed.Analysis.FeasibilityNotes != "" {
-				b.WriteString("\n**Feasibility Notes:** ")
-				b.WriteString(parsed.Analysis.FeasibilityNotes)
-				b.WriteString("\n")
-			}
+		if parsed.EngineeringAnalysis != "" {
+			b.WriteString("\n### 3. Engineering Analysis\n")
+			b.WriteString(parsed.EngineeringAnalysis)
+			b.WriteString("\n")
+		}
+		if parsed.AlternativeRejection != "" {
+			b.WriteString("\n### 4. Alternative Rejection\n")
+			b.WriteString(parsed.AlternativeRejection)
+			b.WriteString("\n")
+		}
+		if parsed.FeasibilityWarning != "" {
+			b.WriteString("\n### 5. Feasibility Warning\n")
+			b.WriteString(parsed.FeasibilityWarning)
+			b.WriteString("\n")
 		}
 		parsed.Report = strings.TrimSpace(b.String())
 	}
