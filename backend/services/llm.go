@@ -279,27 +279,35 @@ func cleanJSON(raw string) string {
 //
 // ──────────────────────────────────────────────────────────────────────────
 const intentSystemPrompt = `### ROLE: Principal Materials Systems Architect
-### TASK: Structural Intent Decomposition with HARD CONSTRAINTS
+### TASK: Universal Engineering Intent Extraction
 
-Analyze the query. You are not just looking for "best" properties; you are looking for the "best material WITHIN THE SPECIFIED PROCESS."
+Analyze the query to build a "Search & Constraint" profile. You must categorize the request and identify the specific physical limits of the user's environment.
 
-### 1. THE PROCESS IS THE MASTER:
-- If "3D Print/Desktop" is mentioned, Category MUST stay within **Polymers/Composites** compatible with FDM.
-- You are STRICTLY FORBIDDEN from suggesting Metals, Ceramics, or Industrial-grade filaments (PEEK/Ultem) unless the equipment explicitly supports them.
+### 1. CATEGORY-SPECIFIC PHYSICS (The "North Star"):
+- **POLYMERS**: Priority = Glass Transition ($T_g$), HDT, and Chemical Compatibility.
+- **METALS**: Priority = Yield Strength ($\sigma_y$), Thermal Conductivity ($k$), and Corrosion Potential.
+- **CERAMICS**: Priority = Thermal Shock Resistance ($R$), Hardness, and Weibull Modulus.
+- **COMPOSITES**: Priority = Specific Modulus ($E/\rho$), Interlaminar Shear, and Anisotropy.
 
-### 2. PHYSICS-BASED PARAMETERS:
-- For "Motor Heat": Target $T_g > 85^\circ\text{C}$ and HDT (Heat Deflection Temp) as primary filters.
-- For "High Torque": Target Flexural Modulus and Interlaminar Shear Strength.
+### 2. THE HARDWARE CEILING (Processing Constraint):
+Identify the "Tool limit" to prevent "Absurd Recommendations":
+- **3D Printing (FDM)**: Lock nozzle temp < 270°C (Hobby) or 450°C (Industrial).
+- **CNC/Machining**: Identify material hardness limits (e.g., "Cannot machine hardened D2 steel with basic end mills").
+- **Casting/Foundry**: Identify melting point ($T_m$) vs. crucible/furnace limits.
 
-### OUTPUT SCHEMA (STRICT JSON):
+### OUTPUT SCHEMA (STRICT JSON ONLY):
 {
-  "process_lock": "FDM_Desktop",
-  "category": "Polymer|Composite",
-  "filters": {
-    "tg_celsius": {"min": 80},
-    "max_nozzle_temp_c": {"max": 265}
-  },
-  "required_performance_indices": ["Specific Stiffness", "Thermal Creep Resistance"]
+	"inferred_category": "Metal|Polymer|Ceramic|Composite|null",
+	"process_lock": "string",
+	"hardware_limits": {
+		"thermal_ceiling_c": float|null,
+		"max_hardness_vickers": float|null
+	},
+	"search_parameters": {
+		"primary_metric": {"field": "string", "min": float|null, "unit": "SI"},
+		"environment": ["UV_exposure", "Cryogenic", "Vacuum", "High_Vibration"]
+	},
+	"merit_index": "e.g., Maximize sigma/rho or E/k"
 }
 
 Return JSON only. Do not include markdown code fences or extra text.`
@@ -307,13 +315,21 @@ Return JSON only. Do not include markdown code fences or extra text.`
 // ExtractIntent parses a natural language query into structured filters.
 func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, error) {
 	type intentLLMResponse struct {
-		ProcessLock                 string `json:"process_lock"`
-		Category                    string `json:"category"`
-		RequiredPerformanceIndices  []string `json:"required_performance_indices"`
-		Filters                     map[string]struct {
-			Min *float64 `json:"min"`
-			Max *float64 `json:"max"`
-		} `json:"filters"`
+		InferredCategory string `json:"inferred_category"`
+		ProcessLock      string `json:"process_lock"`
+		HardwareLimits   struct {
+			ThermalCeilingC    *float64 `json:"thermal_ceiling_c"`
+			MaxHardnessVickers *float64 `json:"max_hardness_vickers"`
+		} `json:"hardware_limits"`
+		SearchParameters struct {
+			PrimaryMetric struct {
+				Field string   `json:"field"`
+				Min   *float64 `json:"min"`
+				Unit  string   `json:"unit"`
+			} `json:"primary_metric"`
+			Environment []string `json:"environment"`
+		} `json:"search_parameters"`
+		MeritIndex string `json:"merit_index"`
 	}
 
 	prompt := intentSystemPrompt + "\n\nQuery: " + query
@@ -336,42 +352,40 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 
 	intent := models.IntentJSON{
 		Filters:  map[string]models.RangeFilter{},
-		Category: llmIntent.Category,
+		Category: llmIntent.InferredCategory,
 	}
 
-	for field, rf := range llmIntent.Filters {
-		mappedField := field
-		mappedMin := rf.Min
-		mappedMax := rf.Max
-
-		if field == "tg_celsius" {
-			mappedField = "melting_point"
-			if rf.Min != nil {
-				v := *rf.Min + 273.15
-				mappedMin = &v
-			}
-			if rf.Max != nil {
-				v := *rf.Max + 273.15
-				mappedMax = &v
-			}
-		}
-
-		if field == "max_nozzle_temp_c" {
-			continue
-		}
-
-		intent.Filters[mappedField] = models.RangeFilter{Min: mappedMin, Max: mappedMax}
+	if llmIntent.SearchParameters.PrimaryMetric.Field != "" {
+		intent.Filters[llmIntent.SearchParameters.PrimaryMetric.Field] = models.RangeFilter{Min: llmIntent.SearchParameters.PrimaryMetric.Min}
 	}
 
-	if strings.EqualFold(llmIntent.ProcessLock, "FDM_Desktop") {
-		if strings.EqualFold(intent.Category, "Composite") {
-			intent.SortBy = "density"
-			intent.SortDir = "ASC"
-		} else {
+	if llmIntent.HardwareLimits.MaxHardnessVickers != nil {
+		intent.Filters["hardness_vickers"] = models.RangeFilter{Max: llmIntent.HardwareLimits.MaxHardnessVickers}
+	}
+
+	if strings.Contains(strings.ToLower(llmIntent.ProcessLock), "fdm") || strings.Contains(strings.ToLower(llmIntent.ProcessLock), "hobby") {
+		if !strings.EqualFold(intent.Category, "Composite") {
 			intent.Category = "Polymer"
-			intent.SortBy = "density"
-			intent.SortDir = "ASC"
 		}
+		intent.Filters["melting_point"] = models.RangeFilter{Max: func() *float64 {
+			if llmIntent.HardwareLimits.ThermalCeilingC != nil {
+				v := *llmIntent.HardwareLimits.ThermalCeilingC + 273.15
+				return &v
+			}
+			v := 543.15
+			return &v
+		}()}
+	}
+
+	if strings.Contains(strings.ToLower(llmIntent.MeritIndex), "sigma/rho") {
+		intent.SortBy = "yield_strength"
+		intent.SortDir = "DESC"
+	} else if strings.Contains(strings.ToLower(llmIntent.MeritIndex), "e/k") {
+		intent.SortBy = "youngs_modulus"
+		intent.SortDir = "DESC"
+	} else if intent.SortBy == "" {
+		intent.SortBy = "density"
+		intent.SortDir = "ASC"
 	}
 
 	if intent.Category == "" || strings.EqualFold(intent.Category, "null") {
@@ -387,52 +401,57 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 // ──────────────────────────────────────────────────────────────────────────
 
 const longContextSystemPrompt = `### ROLE: Chief Materials Scientist & Manufacturing Consultant
-### PHILOSOPHY: "The Best Material is the one that survives the process and the environment."
+### PHILOSOPHY: "Properties are secondary to Processability."
 
-You are auditing a material catalog based on a technical specification. Your goal is to find the "Pareto-Optimal" solution that balances performance with manufacturing reality.
+Evaluate the retrieved catalog entries. You must act as a mentor, rejecting materials that look good on paper but fail the "Shop Floor" reality check.
 
-### EVALUATION PROTOCOL:
-1. **The Feasibility Gate (Binary)**:
-	 - Can the specified process (e.g., Desktop 3D Printing) actually handle this material?
-	 - If a material requires industrial equipment not mentioned by the user, DISCARD IT.
-2. **The Failure Mode Analysis**:
-	 - Identify the "Weakest Link." Is it the $T_g$ for a polymer? Is it the brittle-to-ductile transition for a metal? Is it the cost?
-3. **Performance Indexing**:
-	 - Use Material Indices (e.g., $\sigma/\rho$ for strength-to-weight) to rank the remaining candidates.
+### EVALUATION PROTOCOL BY CLASS:
+
+1. **IF POLYMER**:
+	- Check Service Temp vs. $T_g$. If $T_{service} > 0.8 \times T_g$, flag for **Viscoelastic Creep**.
+	- Check "Printability/Formability." Reject High-Temp resins (Ultem/PEEK) for hobbyist setups.
+2. **IF METAL**:
+	- Check **Specific Strength** ($\sigma_y/\rho$).
+	- Check Machinability/Weldability. If the user is a hobbyist, reject Titanium or Superalloys in favor of 6061-Al or 1018-Steel.
+3. **IF CERAMIC**:
+	- Check **Thermal Shock Resistance** ($R = \frac{\sigma_f k}{E \alpha}$).
+	- Reject if the application requires high toughness (impact) unless it's a toughened ceramic (e.g., ZTA).
+4. **IF COMPOSITE**:
+	- Check fiber orientation. If the load is multi-axial, warn about **Transverse Failure**.
 
 ### OUTPUT FORMAT (STRICT JSON ONLY):
 {
-	"recommendation": "Material Name",
-	"technical_stats": {
-		"property_1": "Value + Unit (Why it is the critical success factor)",
-		"property_2": "Value + Unit (Why it matters for feasibility)"
-	},
-	"engineering_rationale": "Deep scientific explanation. Use terms like 'thermal diffusivity,' 'modulus of elasticity,' or 'cross-linking density' where appropriate.",
-	"comparative_analysis": "Explicitly explain why the 'obvious' or 'high-performance but impossible' alternatives were rejected.",
-	"manufacturing_directives": "Specific advice for the shop floor or printer settings to ensure success."
+  "recommendation": "Material Name",
+  "fundamental_physics": {
+	 "key_metric_1": "Value + why it wins in this specific physics domain",
+	 "key_metric_2": "Value + why it ensures feasibility"
+  },
+  "selection_narrative": "A first-principles explanation of the choice. Use terms like 'dislocation density,' 'chain entanglement,' or 'stress intensity factor.'",
+  "rejection_logic": "Explicitly state why the 'Absurd Choice' (e.g. Metal for a printer) or 'Paper Tiger' (e.g. PLA for heat) was discarded.",
+  "manufacturing_advice": "Critical settings for success (e.g., 'Preheat the stock', 'Anneal post-process', 'Use carbide bits')."
 }
-
-### STYLE GUIDELINES:
-- Use LaTeX for all scientific symbols and equations (e.g., $\rho$ for density, $\sigma_y$ for yield strength).
-- Tone: Professional, authoritative, and mentorship-oriented.
 
 Return JSON only. Ensure strings are escaped and do not include markdown code fences or extra text outside JSON.`
 
 type LongContextLLMResponse struct {
-	Recommendation      string            `json:"recommendation"`
-	TechnicalStats      map[string]string `json:"technical_stats"`
-	EngineeringRationale string            `json:"engineering_rationale"`
-	ComparativeAnalysis string            `json:"comparative_analysis"`
-	ManufacturingDirectives string        `json:"manufacturing_directives"`
-	TopCandidate         string            `json:"top_candidate"`
-	FundamentalStats     map[string]string `json:"fundamental_stats"`
-	EngineeringAnalysis  string            `json:"engineering_analysis"`
-	AlternativeRejection string            `json:"alternative_rejection"`
-	FeasibilityWarning   string            `json:"feasibility_warning"`
-	RecommendedIDs       []int             `json:"recommended_ids"`
-	ReportMarkdown       string            `json:"report_markdown"`
-	LegacyReport         string            `json:"report"`
-	Report               string            `json:"-"`
+	Recommendation          string            `json:"recommendation"`
+	FundamentalPhysics      map[string]string `json:"fundamental_physics"`
+	SelectionNarrative      string            `json:"selection_narrative"`
+	RejectionLogic          string            `json:"rejection_logic"`
+	ManufacturingAdvice     string            `json:"manufacturing_advice"`
+	TechnicalStats          map[string]string `json:"technical_stats"`
+	EngineeringRationale    string            `json:"engineering_rationale"`
+	ComparativeAnalysis     string            `json:"comparative_analysis"`
+	ManufacturingDirectives string            `json:"manufacturing_directives"`
+	TopCandidate            string            `json:"top_candidate"`
+	FundamentalStats        map[string]string `json:"fundamental_stats"`
+	EngineeringAnalysis     string            `json:"engineering_analysis"`
+	AlternativeRejection    string            `json:"alternative_rejection"`
+	FeasibilityWarning      string            `json:"feasibility_warning"`
+	RecommendedIDs          []int             `json:"recommended_ids"`
+	ReportMarkdown          string            `json:"report_markdown"`
+	LegacyReport            string            `json:"report"`
+	Report                  string            `json:"-"`
 }
 
 // FilterByDomain cleanly separates the 8,000+ db into domain buckets.
@@ -586,7 +605,10 @@ CATALOG (All Available Materials - pick ONLY from here):
 			b.WriteString(candidateName)
 			b.WriteString("\n")
 		}
-		stats := parsed.TechnicalStats
+		stats := parsed.FundamentalPhysics
+		if len(stats) == 0 {
+			stats = parsed.TechnicalStats
+		}
 		if len(stats) == 0 {
 			stats = parsed.FundamentalStats
 		}
@@ -600,7 +622,10 @@ CATALOG (All Available Materials - pick ONLY from here):
 				b.WriteString("\n")
 			}
 		}
-		analysis := parsed.EngineeringRationale
+		analysis := parsed.SelectionNarrative
+		if analysis == "" {
+			analysis = parsed.EngineeringRationale
+		}
 		if analysis == "" {
 			analysis = parsed.EngineeringAnalysis
 		}
@@ -609,7 +634,10 @@ CATALOG (All Available Materials - pick ONLY from here):
 			b.WriteString(analysis)
 			b.WriteString("\n")
 		}
-		comp := parsed.ComparativeAnalysis
+		comp := parsed.RejectionLogic
+		if comp == "" {
+			comp = parsed.ComparativeAnalysis
+		}
 		if comp == "" {
 			comp = parsed.AlternativeRejection
 		}
@@ -618,7 +646,10 @@ CATALOG (All Available Materials - pick ONLY from here):
 			b.WriteString(comp)
 			b.WriteString("\n")
 		}
-		directives := parsed.ManufacturingDirectives
+		directives := parsed.ManufacturingAdvice
+		if directives == "" {
+			directives = parsed.ManufacturingDirectives
+		}
 		if directives == "" {
 			directives = parsed.FeasibilityWarning
 		}
