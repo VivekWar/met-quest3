@@ -107,9 +107,12 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	if activeGoogleKey != "" {
 		googleModels := []string{
 			"gemini-2.5-flash",
+			"gemini-2.0-flash-001",
 			"gemini-2.5-pro",
 			"gemini-3.1-flash-live-preview",
-			"gemini-1.5-flash",
+			"gemini-1.5-flash-8b",
+			"gemini-flash-latest",
+			"gemini-1.5-pro",
 			"gemini-2.0-flash",
 		}
 		log.Printf("🛡️  Attempting Google AI Tier (Key: %s)", maskKey(activeGoogleKey))
@@ -181,7 +184,7 @@ func getMockResponse(prompt string) (string, int, error) {
 // callOpenRouter handles calls to the OpenRouter proxy
 func callOpenRouter(ctx context.Context, apiKey, prompt string, temperature float64, maxTokens int) (string, int, int, error) {
 	payload := openRouterRequest{
-		Model: "google/gemini-2.0-flash",
+		Model: "google/gemini-2.5-flash",
 		Messages: []openRouterMessage{
 			{Role: "user", Content: prompt},
 		},
