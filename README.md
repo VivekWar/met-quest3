@@ -1,3 +1,13 @@
+---
+title: Tech Titans Smart Alloy Selector
+emoji: 🧪
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
+# 🧬 Smart Alloy Selector - Tech Titans (MET-QUEST '26)
 # Smart Alloy Selector & Material Recommendation: Tech Titans 🚀
 **Needle in the Data-Stack: The AI-Powered Virtual Materials Scientist**
 
