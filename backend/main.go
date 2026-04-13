@@ -54,6 +54,9 @@ func main() {
 
 	// ── Create router ──────────────────────────────────────────────────
 	r := gin.New()
+	if err := r.SetTrustedProxies(nil); err != nil {
+		log.Printf("⚠️  Failed to set trusted proxies: %v", err)
+	}
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 

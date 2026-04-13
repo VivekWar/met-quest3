@@ -127,13 +127,14 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 				return text, tokens, nil
 			}
 			lastErr = err
-			// Fallback if status is 4xx/5xx (except 401 Unauthorized which usually means bad key)
-			if status != http.StatusUnauthorized && status != 0 {
-				log.Printf("⚠️  Google AI %s failed (%d): %v", model, status, err)
-				continue
+			// Only treat auth failures as fatal; timeout/network issues (status=0)
+			// should continue to next model in the fallback chain.
+			if status == http.StatusUnauthorized {
+				log.Printf("❌ Google AI Fatal Error (%d): %v", status, err)
+				break
 			}
-			log.Printf("❌ Google AI Fatal Error (%d): %v", status, err)
-			break
+			log.Printf("⚠️  Google AI %s failed (%d): %v", model, status, err)
+			continue
 		}
 	}
 
@@ -196,7 +197,7 @@ func callOpenRouter(ctx context.Context, apiKey, prompt string, temperature floa
 	req.Header.Set("HTTP-Referer", "http://localhost:5173")
 	req.Header.Set("X-Title", "Smart Alloy Selector")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, 0, err
@@ -792,7 +793,7 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, 0, err
