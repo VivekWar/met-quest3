@@ -125,7 +125,11 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 			}
 
 			if err == nil {
-				return text, tokens, nil
+				if !isCompleteJSONObject(text) {
+					err = fmt.Errorf("model %s returned incomplete/invalid JSON payload", model)
+				} else {
+					return text, tokens, nil
+				}
 			}
 			lastErr = err
 			// Only treat auth failures as fatal; timeout/network issues (status=0)
@@ -144,6 +148,9 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 		log.Printf("🤖 Attempting OpenRouter Fallback (Key: %s)", maskKey(openRouterKey))
 		text, tokens, _, err := callOpenRouter(ctx, openRouterKey, prompt, temperature, maxTokens)
 		if err == nil {
+			if !isCompleteJSONObject(text) {
+				return "", 0, fmt.Errorf("openrouter returned incomplete/invalid JSON payload")
+			}
 			return text, tokens, nil
 		}
 		return "", 0, fmt.Errorf("all LLM providers failed: %w", err)
@@ -161,6 +168,18 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	}
 
 	return "", 0, fmt.Errorf("%s%s (Keys checked - Google: %v, OpenRouter: %v)", detailedErr, skipReason, activeGoogleKey != "", validOR)
+}
+
+func isCompleteJSONObject(raw string) bool {
+	cleaned := cleanJSON(raw)
+	if cleaned == "" {
+		return false
+	}
+	trimmed := strings.TrimSpace(cleaned)
+	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
+		return false
+	}
+	return json.Valid([]byte(trimmed))
 }
 
 func maskKey(key string) string {
