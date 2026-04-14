@@ -423,7 +423,11 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 		intent.Filters[f] = models.RangeFilter{Min: llmIntent.SearchParameters.PrimaryMetric.Min}
 	}
 
-	if llmIntent.HardwareLimits.ThermalCeilingC != nil {
+	desktopPrintLock := strings.Contains(strings.ToLower(llmIntent.ProcessLock), "fdm") ||
+		strings.Contains(strings.ToLower(llmIntent.ProcessLock), "3d print") ||
+		strings.Contains(strings.ToLower(llmIntent.ProcessLock), "desktop")
+
+	if llmIntent.HardwareLimits.ThermalCeilingC != nil && !desktopPrintLock {
 		limitK := *llmIntent.HardwareLimits.ThermalCeilingC + 273.15
 		intent.Filters["melting_point"] = models.RangeFilter{Max: &limitK}
 	}
@@ -432,14 +436,15 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 		intent.Filters["hardness_vickers"] = models.RangeFilter{Max: llmIntent.HardwareLimits.MaxHardnessVickers}
 	}
 
-	if strings.Contains(strings.ToLower(llmIntent.ProcessLock), "fdm") || strings.Contains(strings.ToLower(llmIntent.ProcessLock), "3d print") {
+	if desktopPrintLock {
 		// Hard lock: desktop-class FDM requests must route to printable classes.
 		intent.Category = "Polymer"
 		limitC := 270.0
 		if llmIntent.HardwareLimits.ThermalCeilingC != nil {
 			limitC = *llmIntent.HardwareLimits.ThermalCeilingC
 		}
-		intent.Filters["max_processing_temp"] = models.RangeFilter{Max: &limitC}
+		// Handler expands filters to min_/max_ keys; keep field name canonical here.
+		intent.Filters["processing_temp"] = models.RangeFilter{Max: &limitC}
 	}
 
 	if strings.Contains(strings.ToLower(llmIntent.MeritIndex), "sigma/rho") {
@@ -467,6 +472,10 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 
 const longContextSystemPrompt = `### ROLE: Chief Materials Scientist & Manufacturing Consultant
 ### PHILOSOPHY: "Properties are secondary to Processability."
+
+CRITICAL: For desktop FDM / 3D-printing scenarios, reject Metals/Alloys entirely and prioritize printable Polymer or Composite options.
+Use Pareto trade-off reasoning: thermal survivability + desktop printability + strength-to-weight.
+If a high-heat polymer is unprintable on desktop and PLA is too thermally weak, prefer middle-ground materials (e.g., PETG-class behavior) when present.
 
 Evaluate the retrieved catalog entries. You must act as a mentor, rejecting materials that look good on paper but fail the "Shop Floor" reality check.
 
@@ -980,6 +989,12 @@ func RouteQuery(ctx context.Context, query string) (string, int, error) {
 	}
 
 	normalized := normalizeRoutedCategory(route.Category)
+	qLower := strings.ToLower(query)
+	if (strings.Contains(qLower, "3d print") || strings.Contains(qLower, "fdm") || strings.Contains(qLower, "desktop printer")) &&
+		(normalized == "Alloys" || normalized == "Pure_Metals") {
+		log.Printf("⚠️  Routing guardrail: overriding %s -> Polymers for desktop 3D-print query", normalized)
+		normalized = "Polymers"
+	}
 	if normalized == "" {
 		normalized = InferCategoryHeuristic(query)
 		log.Printf("🎯 Invalid/empty LLM category %q. Heuristic fallback: %s", route.Category, normalized)
