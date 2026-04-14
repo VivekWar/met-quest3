@@ -3,3 +3,6 @@ requests>=2.31.0
 pandas>=2.0.0
 psycopg2-binary>=2.9.0
 tqdm>=4.65.0
+lxml>=5.0.0
+jarvis-tools>=2025.5.30
+beautifulsoup4>=4.12.0

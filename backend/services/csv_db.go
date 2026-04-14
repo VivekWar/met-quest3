@@ -84,10 +84,10 @@ func LoadCSVDB() error {
 	inMemByClass = map[string][]models.Material{}
 
 	modularFiles := map[string][]string{
-		"Polymer":  {"data/polymers.csv", "/app/data/polymers.csv", "../data/polymers.csv"},
-		"Metal":    {"data/metals.csv", "/app/data/metals.csv", "../data/metals.csv"},
-		"Ceramic":  {"data/ceramics.csv", "/app/data/ceramics.csv", "../data/ceramics.csv"},
-		"Composite": {"data/composites.csv", "/app/data/composites.csv", "../data/composites.csv"},
+		"Polymer":   {"../data/polymers.csv", "data/polymers.csv", "/app/data/polymers.csv"},
+		"Metal":     {"../data/metals.csv", "data/metals.csv", "/app/data/metals.csv"},
+		"Ceramic":   {"../data/ceramics.csv", "data/ceramics.csv", "/app/data/ceramics.csv"},
+		"Composite": {"../data/composites.csv", "data/composites.csv", "/app/data/composites.csv"},
 	}
 
 	idCounter := 1
@@ -115,9 +115,9 @@ func LoadCSVDB() error {
 	}
 
 	fallbackPaths := []string{
+		"../data/materials_cleaned.csv",
 		"data/materials_cleaned.csv",
 		"/app/data/materials_cleaned.csv",
-		"../data/materials_cleaned.csv",
 		"materials_cleaned.csv",
 	}
 	rows, foundPath, err := loadCSVFromPaths(fallbackPaths, idCounter)

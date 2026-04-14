@@ -171,7 +171,7 @@ func maskKey(key string) string {
 
 func getMockResponse(prompt string) (string, int, error) {
 	if strings.Contains(prompt, "Virtual Materials Scientist") {
-		mockJSON := `{"recommended_ids": [1, 2, 3], "report": "## 🏆 Recommendation\n(Mock Mode: AI is currently resting)"}`
+		mockJSON := `{"recommended_ids": [1, 2, 3]Once, "report": "## 🏆 Recommendation\n(Mock Mode: AI is currently resting)"}`
 		return mockJSON, 100, nil
 	} else if strings.Contains(prompt, "Category") || strings.Contains(prompt, "filters") {
 		return `{"category": "Metal", "filters": {}}`, 20, nil
@@ -815,4 +815,639 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 	}
 
 	return result.Candidates[0].Content.Parts[0].Text, result.UsageMetadata.TotalTokenCount, resp.StatusCode, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+//  DISPATCHER LOGIC: LLM-Powered Material Category Router
+// ──────────────────────────────────────────────────────────────────────────
+
+const routeQuerySystemPrompt = `### ROLE: Material Classification Expert
+### TASK: Route user query to specific material category
+
+Analyze the user's query and categorize it into ONE of these buckets:
+- Polymers (plastics, resins, rubbers)
+- Alloys (aluminum alloys, steel alloys, superalloys)
+- Pure_Metals (pure metals like copper, titanium, nickel)
+- Ceramics (oxides, nitrides, silicates)
+- Composites (fiber-reinforced, laminates)
+
+### CLASSIFICATION RULES:
+1. **Polymers**: Keywords: "plastic", "polymer", "3D print", "resin", "rubber", "flexible", "lightweight", "ABS", "PEEK", "PLA", "Nylon"
+2. **Alloys**: Keywords: "alloy", "steel", "aluminum", "temper", "grade", "6061", "7075", "304 stainless", "yield strength", "fatigue"
+3. **Pure_Metals**: Keywords: "pure metal", "copper", "titanium", "nickel", "tungsten", "pure aluminum", "elemental"
+4. **Ceramics**: Keywords: "ceramic", "oxide", "carbide", "nitride", "thermal shock", "hardness", "Al2O3", "SiC", "high temperature"
+5. **Composites**: Keywords: "composite", "fiber", "laminate", "carbon fiber", "CFRP", "GFRP", "interlaminar", "anisotropic"
+
+### OUTPUT SCHEMA (STRICT JSON ONLY):
+{
+  "category": "Polymers|Alloys|Pure_Metals|Ceramics|Composites",
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation of classification"
+}
+
+Return JSON only. Do not include markdown code fences or extra text.`
+
+type RouteQueryResponse struct {
+	Category   string  `json:"category"`
+	Confidence float64 `json:"confidence"`
+	Reasoning  string  `json:"reasoning"`
+}
+
+func normalizeRoutedCategory(category string) string {
+	switch strings.TrimSpace(strings.ToLower(category)) {
+	case "polymer", "polymers":
+		return "Polymers"
+	case "alloy", "alloys", "metal", "metals":
+		return "Alloys"
+	case "pure_metal", "pure_metals", "pure metal", "pure metals":
+		return "Pure_Metals"
+	case "ceramic", "ceramics":
+		return "Ceramics"
+	case "composite", "composites":
+		return "Composites"
+	default:
+		return ""
+	}
+}
+
+// InferCategoryHeuristic provides deterministic routing when LLM routing is unavailable.
+func InferCategoryHeuristic(query string) string {
+	q := strings.ToLower(query)
+
+	if strings.Contains(q, "composite") || strings.Contains(q, "cfrp") || strings.Contains(q, "gfrp") || strings.Contains(q, "interlaminar") || strings.Contains(q, "fiber") || strings.Contains(q, "laminate") {
+		return "Composites"
+	}
+	if strings.Contains(q, "polymer") || strings.Contains(q, "plastic") || strings.Contains(q, "resin") || strings.Contains(q, "rubber") || strings.Contains(q, "3d print") || strings.Contains(q, "pla") || strings.Contains(q, "peek") || strings.Contains(q, "nylon") {
+		return "Polymers"
+	}
+	if strings.Contains(q, "ceramic") || strings.Contains(q, "carbide") || strings.Contains(q, "nitride") || strings.Contains(q, "oxide") || strings.Contains(q, "thermal shock") || strings.Contains(q, "al2o3") || strings.Contains(q, "sic") {
+		return "Ceramics"
+	}
+	if strings.Contains(q, "pure metal") || strings.Contains(q, "elemental") || strings.Contains(q, "copper") || strings.Contains(q, "tungsten") || strings.Contains(q, "nickel") || strings.Contains(q, "titanium") {
+		return "Pure_Metals"
+	}
+	if strings.Contains(q, "alloy") || strings.Contains(q, "steel") || strings.Contains(q, "stainless") || strings.Contains(q, "6061") || strings.Contains(q, "7075") || strings.Contains(q, "inconel") || strings.Contains(q, "grade") || strings.Contains(q, "temper") {
+		return "Alloys"
+	}
+
+	return "Alloys"
+}
+
+// RouteQuery uses an LLM call to categorize the user's request into one of 5 material buckets.
+func RouteQuery(ctx context.Context, query string) (string, int, error) {
+	prompt := routeQuerySystemPrompt + "\n\nUser Query: " + query
+
+	raw, tokens, err := callGemini(ctx, prompt, 0.1, 256)
+	if err != nil {
+		return "", 0, fmt.Errorf("route query LLM call: %w", err)
+	}
+
+	cleaned := cleanJSON(raw)
+	repaired := repairJSON(cleaned)
+
+	var route RouteQueryResponse
+	if err := json.Unmarshal([]byte(repaired), &route); err != nil {
+		log.Printf("WARN: Route query parsing failed: %v\nRaw: %s", err, raw)
+		fallback := InferCategoryHeuristic(query)
+		log.Printf("🎯 Heuristic fallback routing used: %s", fallback)
+		return fallback, tokens, nil
+	}
+
+	normalized := normalizeRoutedCategory(route.Category)
+	if normalized == "" {
+		normalized = InferCategoryHeuristic(query)
+		log.Printf("🎯 Invalid/empty LLM category %q. Heuristic fallback: %s", route.Category, normalized)
+	}
+
+	log.Printf("🎯 Query routed to: %s (confidence: %.2f)", normalized, route.Confidence)
+	return normalized, tokens, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+//  SPECIALIZED SEARCH FUNCTIONS: Category-Specific Filtering
+// ──────────────────────────────────────────────────────────────────────────
+
+// SearchAlloys searches alloy-specific columns: Yield_Strength, Temper, Fatigue_Limit, Corrosion_Rating
+func SearchAlloys(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
+	if limit <= 0 || limit > 10 {
+		limit = 3
+	}
+
+	var filtered []models.Material
+
+	for _, m := range materials {
+		// Only include metals that are alloys (have yield strength or specific subcategories)
+		if m.Category != "Metal" {
+			continue
+		}
+
+		// Priority check: Yield strength (core alloy property)
+		if minYield, ok := constraints["min_yield_strength"].(float64); ok && m.YieldStrength != nil {
+			if *m.YieldStrength < minYield {
+				continue
+			}
+		}
+
+		// Thermal ceiling check (processability)
+		if maxMelt, ok := constraints["max_melting_point"].(float64); ok && m.MeltingPoint != nil {
+			if *m.MeltingPoint > maxMelt {
+				continue
+			}
+		}
+
+		// Corrosion resistance approximation (electrical resistivity proxy)
+		if minResist, ok := constraints["min_corrosion_resistance"].(float64); ok && m.ElectricalResistivity != nil {
+			if *m.ElectricalResistivity < minResist {
+				continue
+			}
+		}
+
+		// Fatigue proxy: Young's modulus (higher stiffness = better fatigue resistance)
+		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok && m.YoungsModulus != nil {
+			if *m.YoungsModulus < minModulus {
+				continue
+			}
+		}
+
+		filtered = append(filtered, m)
+	}
+
+	// Sort by yield strength (descending) for alloys
+	if len(filtered) > 1 {
+		for i := 0; i < len(filtered)-1; i++ {
+			for j := i + 1; j < len(filtered); j++ {
+				y1 := 0.0
+				if filtered[i].YieldStrength != nil {
+					y1 = *filtered[i].YieldStrength
+				}
+				y2 := 0.0
+				if filtered[j].YieldStrength != nil {
+					y2 = *filtered[j].YieldStrength
+				}
+				if y2 > y1 {
+					filtered[i], filtered[j] = filtered[j], filtered[i]
+				}
+			}
+		}
+	}
+
+	if len(filtered) > limit {
+		return filtered[:limit]
+	}
+	return filtered
+}
+
+// SearchPolymers searches polymer-specific columns: Glass_Transition_Temp, HDT, Processing_Temp, Crystallinity
+func SearchPolymers(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
+	if limit <= 0 || limit > 10 {
+		limit = 3
+	}
+
+	var filtered []models.Material
+
+	for _, m := range materials {
+		// Only include polymers
+		if m.Category != "Polymer" {
+			continue
+		}
+
+		// Glass transition temperature (primary polymer property)
+		if minTg, ok := constraints["min_glass_transition_temp"].(float64); ok && m.GlassTransitionTemp != nil {
+			if *m.GlassTransitionTemp < minTg {
+				continue
+			}
+		}
+		if maxTg, ok := constraints["max_glass_transition_temp"].(float64); ok && m.GlassTransitionTemp != nil {
+			if *m.GlassTransitionTemp > maxTg {
+				continue
+			}
+		}
+
+		// Heat deflection temperature (processability/service temp)
+		if minHDT, ok := constraints["min_hdt"].(float64); ok && m.HeatDeflectionTemp != nil {
+			if *m.HeatDeflectionTemp < minHDT {
+				continue
+			}
+		}
+
+		// Processing temperature ceiling (manufacturability)
+		if maxProcTemp, ok := constraints["max_processing_temp"].(float64); ok && m.ProcessingTempMaxC != nil {
+			if *m.ProcessingTempMaxC > maxProcTemp {
+				continue
+			}
+		}
+
+		// Crystallinity check (affects stiffness and thermal properties)
+		if minCryst, ok := constraints["min_crystallinity"].(float64); ok && m.Crystallinity != nil {
+			if *m.Crystallinity < minCryst {
+				continue
+			}
+		}
+
+		// Density check (lightweight requirement)
+		if maxDensity, ok := constraints["max_density"].(float64); ok && m.Density != nil {
+			if *m.Density > maxDensity {
+				continue
+			}
+		}
+
+		filtered = append(filtered, m)
+	}
+
+	// Sort by glass transition temp (descending) for polymers
+	if len(filtered) > 1 {
+		for i := 0; i < len(filtered)-1; i++ {
+			for j := i + 1; j < len(filtered); j++ {
+				tg1 := 0.0
+				if filtered[i].GlassTransitionTemp != nil {
+					tg1 = *filtered[i].GlassTransitionTemp
+				}
+				tg2 := 0.0
+				if filtered[j].GlassTransitionTemp != nil {
+					tg2 = *filtered[j].GlassTransitionTemp
+				}
+				if tg2 > tg1 {
+					filtered[i], filtered[j] = filtered[j], filtered[i]
+				}
+			}
+		}
+	}
+
+	if len(filtered) > limit {
+		return filtered[:limit]
+	}
+	return filtered
+}
+
+// SearchCeramics searches ceramic-specific columns: Hardness_Vickers, Thermal_Shock_Resistance, Fracture_Toughness
+func SearchCeramics(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
+	if limit <= 0 || limit > 10 {
+		limit = 3
+	}
+
+	var filtered []models.Material
+
+	for _, m := range materials {
+		// Only include ceramics
+		if m.Category != "Ceramic" {
+			continue
+		}
+
+		// Hardness check (primary ceramic property)
+		if minHardness, ok := constraints["min_hardness_vickers"].(float64); ok && m.HardnessVickers != nil {
+			if *m.HardnessVickers < minHardness {
+				continue
+			}
+		}
+
+		// Fracture toughness (thermal shock resistance proxy)
+		if minToughness, ok := constraints["min_fracture_toughness"].(float64); ok && m.FractureToughness != nil {
+			if *m.FractureToughness < minToughness {
+				continue
+			}
+		}
+
+		// Melting point (high-temp capability)
+		if minMeltPt, ok := constraints["min_melting_point"].(float64); ok && m.MeltingPoint != nil {
+			if *m.MeltingPoint < minMeltPt {
+				continue
+			}
+		}
+
+		// Thermal conductivity (heat dissipation)
+		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok && m.ThermalConductivity != nil {
+			if *m.ThermalConductivity < minTC {
+				continue
+			}
+		}
+
+		// Young's modulus (stiffness)
+		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok && m.YoungsModulus != nil {
+			if *m.YoungsModulus < minModulus {
+				continue
+			}
+		}
+
+		filtered = append(filtered, m)
+	}
+
+	// Sort by hardness (descending) for ceramics
+	if len(filtered) > 1 {
+		for i := 0; i < len(filtered)-1; i++ {
+			for j := i + 1; j < len(filtered); j++ {
+				h1 := 0.0
+				if filtered[i].HardnessVickers != nil {
+					h1 = *filtered[i].HardnessVickers
+				}
+				h2 := 0.0
+				if filtered[j].HardnessVickers != nil {
+					h2 = *filtered[j].HardnessVickers
+				}
+				if h2 > h1 {
+					filtered[i], filtered[j] = filtered[j], filtered[i]
+				}
+			}
+		}
+	}
+
+	if len(filtered) > limit {
+		return filtered[:limit]
+	}
+	return filtered
+}
+
+// SearchComposites searches composite-specific columns: Interlaminar_Shear_Strength, Fiber_Volume_Fraction, Anisotropy
+func SearchComposites(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
+	if limit <= 0 || limit > 10 {
+		limit = 3
+	}
+
+	var filtered []models.Material
+
+	for _, m := range materials {
+		// Only include composites
+		if m.Category != "Composite" {
+			continue
+		}
+
+		// Interlaminar shear strength (critical for composite integrity)
+		if minILSS, ok := constraints["min_ilss"].(float64); ok && m.InterlaminarShear != nil {
+			if *m.InterlaminarShear < minILSS {
+				continue
+			}
+		}
+
+		// Fiber volume fraction (composite quality indicator)
+		if minFibreFrac, ok := constraints["min_fiber_volume_fraction"].(float64); ok && m.FiberVolumeFraction != nil {
+			if *m.FiberVolumeFraction < minFibreFrac {
+				continue
+			}
+		}
+
+		// Young's modulus (stiffness)
+		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok && m.YoungsModulus != nil {
+			if *m.YoungsModulus < minModulus {
+				continue
+			}
+		}
+
+		// Density (weight constraint)
+		if maxDensity, ok := constraints["max_density"].(float64); ok && m.Density != nil {
+			if *m.Density > maxDensity {
+				continue
+			}
+		}
+
+		// Thermal conductivity (performance requirement)
+		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok && m.ThermalConductivity != nil {
+			if *m.ThermalConductivity < minTC {
+				continue
+			}
+		}
+
+		filtered = append(filtered, m)
+	}
+
+	// Sort by interlaminar shear strength (descending) for composites
+	if len(filtered) > 1 {
+		for i := 0; i < len(filtered)-1; i++ {
+			for j := i + 1; j < len(filtered); j++ {
+				ilss1 := 0.0
+				if filtered[i].InterlaminarShear != nil {
+					ilss1 = *filtered[i].InterlaminarShear
+				}
+				ilss2 := 0.0
+				if filtered[j].InterlaminarShear != nil {
+					ilss2 = *filtered[j].InterlaminarShear
+				}
+				if ilss2 > ilss1 {
+					filtered[i], filtered[j] = filtered[j], filtered[i]
+				}
+			}
+		}
+	}
+
+	if len(filtered) > limit {
+		return filtered[:limit]
+	}
+	return filtered
+}
+
+// SearchPureMetals searches pure metals with elemental purity focus
+func SearchPureMetals(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
+	if limit <= 0 || limit > 10 {
+		limit = 3
+	}
+
+	var filtered []models.Material
+
+	for _, m := range materials {
+		// Include metals that are pure or have high purity subcategories
+		if m.Category != "Metal" {
+			continue
+		}
+
+		// Skip alloys (only want pure metals)
+		if m.Subcategory != nil && *m.Subcategory == "Ferrous" {
+			continue // Exclude steel alloys
+		}
+
+		// Electrical conductivity check (indicator of purity)
+		if maxResist, ok := constraints["max_electrical_resistivity"].(float64); ok && m.ElectricalResistivity != nil {
+			if *m.ElectricalResistivity > maxResist {
+				continue
+			}
+		}
+
+		// Melting point check
+		if minMelt, ok := constraints["min_melting_point"].(float64); ok && m.MeltingPoint != nil {
+			if *m.MeltingPoint < minMelt {
+				continue
+			}
+		}
+
+		// Thermal conductivity (pure metals usually have higher TC)
+		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok && m.ThermalConductivity != nil {
+			if *m.ThermalConductivity < minTC {
+				continue
+			}
+		}
+
+		// Density range check
+		if minDensity, ok := constraints["min_density"].(float64); ok && m.Density != nil {
+			if *m.Density < minDensity {
+				continue
+			}
+		}
+		if maxDensity, ok := constraints["max_density"].(float64); ok && m.Density != nil {
+			if *m.Density > maxDensity {
+				continue
+			}
+		}
+
+		filtered = append(filtered, m)
+	}
+
+	// Sort by thermal conductivity (descending) for pure metals
+	if len(filtered) > 1 {
+		for i := 0; i < len(filtered)-1; i++ {
+			for j := i + 1; j < len(filtered); j++ {
+				tc1 := 0.0
+				if filtered[i].ThermalConductivity != nil {
+					tc1 = *filtered[i].ThermalConductivity
+				}
+				tc2 := 0.0
+				if filtered[j].ThermalConductivity != nil {
+					tc2 = *filtered[j].ThermalConductivity
+				}
+				if tc2 > tc1 {
+					filtered[i], filtered[j] = filtered[j], filtered[i]
+				}
+			}
+		}
+	}
+
+	if len(filtered) > limit {
+		return filtered[:limit]
+	}
+	return filtered
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+//  SCIENTIFIC ANALYSIS: First-Principles Physics Verification
+// ──────────────────────────────────────────────────────────────────────────
+
+const scientificAnalysisSystemPrompt = `### ROLE: Principal Physicist & Materials Engineer
+### TASK: Apply first-principles physics verification to candidate materials
+
+For the given user requirement and top 3 candidate materials, perform rigorous engineering checks:
+
+### PHYSICS VERIFICATION PROTOCOL:
+
+**For POLYMERS:**
+- Check: Service Temp < 0.8 × Tg (avoid viscoelastic creep)
+- Check: Processing Temp < material's HDT (manufacturability)
+- Check: If UV-exposed, reject polymers without stabilizers
+- Metric to maximize: Tg - Service_Temp (thermal headroom)
+
+**For METALS/ALLOYS:**
+- Check: Specific Strength (σ_y/ρ) vs application demand
+- Check: Yield Strength margin (apply 1.5× safety factor for dynamic loads)
+- Check: Fatigue limit ≈ 0.3-0.6 × Ultimate Tensile Strength
+- Metric to maximize: σ_y/ρ (strength-to-weight ratio)
+
+**For CERAMICS:**
+- Check: Thermal Shock Resistance (R = σ_f × k / E / α)
+- Check: Fracture Toughness ≥ 3 MPa√m for impact resistance
+- Check: Weibull Modulus ≥ 10 for reliability
+- Metric to maximize: R (thermal shock resistance)
+
+**For COMPOSITES:**
+- Check: Fiber orientation (0°/90°/±45°) matches load direction
+- Check: ILSS (Interlaminar Shear Strength) ≥ 50 MPa minimum
+- Check: Fiber volume fraction ≥ 50% indicates quality
+- Metric to maximize: E/ρ (specific modulus)
+
+### OUTPUT SCHEMA (STRICT JSON ONLY):
+{
+  "top_candidate": "Material Name",
+  "physics_verification": {
+    "check_1_name": "PASS|FAIL",
+    "check_1_value": "computed or measured value with unit",
+    "check_1_physics": "First principles explanation"
+  },
+  "merit_index_calculation": "Formula and result for the key metric",
+  "failure_rejection_reasons": ["material_1: reason 1", "material_2: reason 2", ...],
+  "manufacturing_feasibility": "Step-by-step manufacturing instructions",
+  "safety_margin": "Computed safety factor and assessment"
+}
+
+Return JSON only. Ensure strings are escaped and do not include markdown code fences.`
+
+type PhysicsVerification struct {
+	CheckName string `json:"check_name"`
+	Status    string `json:"status"` // PASS or FAIL
+	Value     string `json:"value"`
+	Physics   string `json:"physics"`
+}
+
+type ScientificAnalysisResponse struct {
+	TopCandidate             string            `json:"top_candidate"`
+	PhysicsVerification      map[string]string `json:"physics_verification"`
+	MeritIndexCalculation    string            `json:"merit_index_calculation"`
+	FailureRejectionReasons  []string          `json:"failure_rejection_reasons"`
+	ManufacturingFeasibility string            `json:"manufacturing_feasibility"`
+	SafetyMargin             string            `json:"safety_margin"`
+}
+
+// ScientificAnalysis applies first-principles physics checks to the top 3 candidates
+func ScientificAnalysis(ctx context.Context, query string, category string, topCandidates []models.Material) (ScientificAnalysisResponse, int, error) {
+	if len(topCandidates) == 0 {
+		return ScientificAnalysisResponse{}, 0, fmt.Errorf("no candidates provided for analysis")
+	}
+
+	// Build compact material representations for the LLM
+	type AnalysisMat struct {
+		Name      string   `json:"name"`
+		Category  string   `json:"category"`
+		Density   *float64 `json:"density_kg_m3,omitempty"`
+		Tg        *float64 `json:"tg_kelvin,omitempty"`
+		HDT       *float64 `json:"hdt_kelvin,omitempty"`
+		YieldStr  *float64 `json:"yield_strength_pa,omitempty"`
+		YoungsMod *float64 `json:"youngs_modulus_pa,omitempty"`
+		ThermalC  *float64 `json:"thermal_conductivity_w_mk,omitempty"`
+		Hardness  *float64 `json:"hardness_vickers,omitempty"`
+		Toughness *float64 `json:"fracture_toughness_mpa_m,omitempty"`
+		ILSS      *float64 `json:"ilss_mpa,omitempty"`
+		FibreFrac *float64 `json:"fiber_volume_fraction,omitempty"`
+	}
+
+	var analysisMats []AnalysisMat
+	for _, m := range topCandidates {
+		analysisMats = append(analysisMats, AnalysisMat{
+			Name:      m.Name,
+			Category:  m.Category,
+			Density:   m.Density,
+			Tg:        m.GlassTransitionTemp,
+			HDT:       m.HeatDeflectionTemp,
+			YieldStr:  m.YieldStrength,
+			YoungsMod: m.YoungsModulus,
+			ThermalC:  m.ThermalConductivity,
+			Hardness:  m.HardnessVickers,
+			Toughness: m.FractureToughness,
+			ILSS:      m.InterlaminarShear,
+			FibreFrac: m.FiberVolumeFraction,
+		})
+	}
+
+	catalogJSON, _ := json.Marshal(analysisMats)
+
+	prompt := scientificAnalysisSystemPrompt + fmt.Sprintf(`
+
+Material Category: %s
+User Requirement Query: "%s"
+
+Three Candidate Materials:
+%s
+
+Please analyze these candidates using first-principles physics and provide comprehensive verification report.`, category, query, string(catalogJSON))
+
+	raw, tokens, err := callGemini(ctx, prompt, 0.1, 1500)
+	if err != nil {
+		return ScientificAnalysisResponse{}, 0, fmt.Errorf("scientific analysis LLM call: %w", err)
+	}
+
+	cleaned := cleanJSON(raw)
+	repaired := repairJSON(cleaned)
+
+	var analysis ScientificAnalysisResponse
+	if err := json.Unmarshal([]byte(repaired), &analysis); err != nil {
+		log.Printf("WARN: Scientific analysis JSON parse failed: %v\nRaw: %s", err, raw)
+		// Return partial response with top candidate name
+		analysis.TopCandidate = topCandidates[0].Name
+		analysis.PhysicsVerification = make(map[string]string)
+		return analysis, tokens, nil
+	}
+
+	return analysis, tokens, nil
 }

@@ -2,17 +2,16 @@
 """
 fetch_materials.py
 ==================
-Fetches engineering materials from The Materials Project REST API (v2)
-using direct HTTP requests — no mp-api library dependency.
+Fetches engineering materials by scraping public internet sources
+(no Materials API dependency).
 
-Supplements the API data with a comprehensive curated table of
+Supplements scraped data with a comprehensive curated table of
 ~70 common engineering materials with full property data.
 
 Requirements:
     pip install requests pandas python-dotenv tqdm
 
 Usage:
-    export MP_API_KEY=ElqT9XOm6aFVqAKYBcAUfutWr3m5giXf
     python fetch_materials.py
 
 Output:
@@ -21,16 +20,24 @@ Output:
 
 import os
 import sys
-import json
-import time
 import logging
 import re
+from io import StringIO
 from pathlib import Path
 from typing import Optional
 
 import requests
 import pandas as pd
-from tqdm import tqdm
+
+try:
+    from jarvis.db.figshare import data as jarvis_figshare_data
+except Exception:
+    jarvis_figshare_data = None
+
+try:
+    from bs4 import BeautifulSoup
+except Exception:
+    BeautifulSoup = None
 
 # ── Logging ───────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -50,96 +57,35 @@ if env_file.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-MP_API_KEY  = os.getenv("MP_API_KEY", "ElqT9XOm6aFVqAKYBcAUfutWr3m5giXf")
-MP_BASE_URL = "https://api.materialsproject.org"
+WIKI_ELEMENTS_URL = "https://en.wikipedia.org/wiki/List_of_chemical_elements"
+PERIODIC_TABLE_JSON_URL = "https://raw.githubusercontent.com/Bowserinator/Periodic-Table-JSON/master/PeriodicTableJSON.json"
+SCRAPE_MAX_ROWS = int(os.getenv("SCRAPE_MAX_ROWS", "6000"))
+MAKEITFROM_GROUP_URLS = [
+    "https://www.makeitfrom.com/material-group/Thermoplastic",
+    "https://www.makeitfrom.com/material-group/Thermoset-Plastic",
+    "https://www.makeitfrom.com/material-group/Nickel-Alloy",
+    "https://www.makeitfrom.com/material-group/Aluminum-Alloy",
+    "https://www.makeitfrom.com/material-group/Copper-Alloy",
+    "https://www.makeitfrom.com/material-group/Iron-Alloy",
+    "https://www.makeitfrom.com/material-group/Magnesium-Alloy",
+    "https://www.makeitfrom.com/material-group/Titanium-Alloy",
+    "https://www.makeitfrom.com/material-group/Cobalt-Alloy",
+    "https://www.makeitfrom.com/material-group/Other-Metal-Alloy",
+    "https://www.makeitfrom.com/material-group/Glass-and-Glass-Ceramic",
+    "https://www.makeitfrom.com/material-group/Oxide-Based-Engineering-Ceramic",
+    "https://www.makeitfrom.com/material-group/Non-Oxide-Engineering-Ceramic",
+]
+MAKEITFROM_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )
+}
 
 DATA_DIR   = Path(__file__).parent
 RAW_JSON   = DATA_DIR / "materials_raw.json"
 OUTPUT_CSV = DATA_DIR / "materials_cleaned.csv"
 POLYMER_ENRICHMENT_CSV = DATA_DIR / "polymer_enrichment.csv"
-
-# ── API Client ────────────────────────────────────────────────────────────
-class MPRestClient:
-    """Lightweight REST client for the Materials Project v2 API."""
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({
-            "X-API-KEY": api_key,
-            "Accept": "application/json",
-            "User-Agent": "MetQuest-SmartAlloySelector/1.0",
-        })
-
-    def get(self, endpoint: str, params: dict = None) -> dict:
-        url = f"{MP_BASE_URL}{endpoint}"
-        for attempt in range(3):
-            try:
-                resp = self.session.get(url, params=params, timeout=30)
-                if resp.status_code == 429:
-                    wait = int(resp.headers.get("Retry-After", 10))
-                    log.warning(f"Rate limited — waiting {wait}s …")
-                    time.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                return resp.json()
-            except requests.HTTPError as e:
-                log.warning(f"HTTP {e.response.status_code} on attempt {attempt+1}: {e}")
-                if attempt == 2:
-                    raise
-                time.sleep(2 ** attempt)
-            except requests.RequestException as e:
-                log.warning(f"Request error (attempt {attempt+1}): {e}")
-                if attempt == 2:
-                    raise
-                time.sleep(2 ** attempt)
-        return {}
-
-    def fetch_summary(self, limit: int = 2000) -> list[dict]:
-        """
-        Fetch materials summary data: formula, density, elements.
-        The v2 API paginates with _limit and _skip.
-        """
-        results = []
-        page_size = 100
-        fields = "material_id,formula_pretty,elements,density,symmetry"
-
-        log.info(f"Fetching summary data (target: {limit} materials) …")
-
-        with tqdm(total=limit, desc="Fetching MP API") as pbar:
-            skip = 0
-            while len(results) < limit:
-                batch_size = min(page_size, limit - len(results))
-                data = self.get("/materials/summary/", params={
-                    "_fields": fields,
-                    "_limit": batch_size,
-                    "_skip": skip,
-                })
-
-                items = data.get("data", [])
-                if not items:
-                    log.info(f"No more data after {len(results)} items")
-                    break
-
-                for item in items:
-                    results.append({
-                        "mp_material_id"        : item.get("material_id", ""),
-                        "name"                  : item.get("formula_pretty", ""),
-                        "formula"               : item.get("formula_pretty", ""),
-                        "elements"              : item.get("elements", []),
-                        "density"               : item.get("density"),
-                        "source"                : "Materials Project",
-                    })
-
-                pbar.update(len(items))
-                skip += len(items)
-
-                # Rate-limit friendly
-                time.sleep(0.2)
-
-        log.info(f"Fetched {len(results)} records from MP API")
-        return results
-
 
 # ── Category Classifier ───────────────────────────────────────────────────
 ELEMENT_METALS = {
@@ -214,6 +160,486 @@ def safe_float(val) -> Optional[float]:
         return None
 
 
+def parse_elements_from_formula(formula: str) -> list[str]:
+    if not formula:
+        return []
+    found = re.findall(r"[A-Z][a-z]?", str(formula))
+    if not found:
+        return []
+    # Keep order, unique symbols
+    return list(dict.fromkeys(found))
+
+
+def extract_first_number(val) -> Optional[float]:
+    """Extract first numeric token from noisy scraped text."""
+    if val is None:
+        return None
+    s = str(val).strip().replace(",", "")
+    if not s or s.lower() in {"nan", "none", "unknown", "n/a", "na", "-"}:
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", s)
+    if not m:
+        return None
+    return safe_float(m.group(0))
+
+
+def find_col(cols: list[str], hints: list[str]) -> str:
+    lowered = {c.lower(): c for c in cols}
+    for h in hints:
+        for lc, original in lowered.items():
+            if h in lc:
+                return original
+    return ""
+
+
+def normalize_text_for_match(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text).strip().lower())
+
+
+def midpoint_from_text(text: str) -> Optional[float]:
+    if text is None:
+        return None
+    s = str(text).strip().replace(",", "")
+    if not s:
+        return None
+    nums = re.findall(r"-?\d+(?:\.\d+)?", s)
+    if not nums:
+        return None
+    values = [safe_float(n) for n in nums if safe_float(n) is not None]
+    if not values:
+        return None
+    if len(values) >= 2 and "to" in s.lower():
+        return sum(values[:2]) / 2.0
+    return values[0]
+
+
+def convert_makeitfrom_value(label: str, text: str) -> Optional[float]:
+    if not text:
+        return None
+    label_n = normalize_text_for_match(label)
+    text_n = normalize_text_for_match(text)
+    value = midpoint_from_text(text_n)
+    if value is None:
+        return None
+
+    # temperatures
+    if any(k in label_n for k in ["temperature", "melting", "glass transition", "heat deflection", "maximum temperature"]):
+        if "°c" in text_n or "c" in text_n:
+            return value + 273.15
+        return value
+
+    # density -> kg/m3
+    if "density" in label_n:
+        if "g/cm" in text_n:
+            return value * 1000.0
+        return value
+
+    # moduli -> Pa
+    if any(k in label_n for k in ["modulus", "young", "flexural modulus", "shear modulus", "bulk modulus"]):
+        if "gpa" in text_n:
+            return value * 1e9
+        if "mpa" in text_n:
+            return value * 1e6
+        return value
+
+    # strengths -> Pa
+    if any(k in label_n for k in ["strength", "hardness", "fatigue"]):
+        if "gpa" in text_n:
+            return value * 1e9
+        if "mpa" in text_n:
+            return value * 1e6
+        return value
+
+    # thermal expansion -> 1/K
+    if "expansion" in label_n:
+        if "µm/m-k" in text_n or "um/m-k" in text_n:
+            return value * 1e-6
+        return value
+
+    # specific heat / latent heat -> J/kg-K or J/kg
+    if "specific heat" in label_n:
+        if "j/g" in text_n:
+            return value * 1000.0
+        return value
+    if "latent heat" in label_n:
+        if "j/g" in text_n:
+            return value * 1000.0
+        return value
+
+    # electrical resistivity, dielectric strength, etc. keep numeric scale
+    if "resistivity" in label_n:
+        if "10x" in text_n:
+            exp_vals = re.findall(r"\d+(?:\.\d+)?", text_n)
+            if exp_vals:
+                nums = [safe_float(v) for v in exp_vals if safe_float(v) is not None]
+                if nums:
+                    exp = sum(nums[:2]) / min(len(nums), 2)
+                    return 10 ** exp
+        return value
+
+    return value
+
+
+def fetch_html(url: str) -> Optional[str]:
+    try:
+        resp = requests.get(url, headers=MAKEITFROM_HEADERS, timeout=30)
+        resp.raise_for_status()
+        return resp.text
+    except Exception as e:
+        log.warning(f"Failed fetching {url}: {e}")
+        return None
+
+
+def soup_from_html(html: str):
+    if BeautifulSoup is None:
+        return None
+    return BeautifulSoup(html, "html.parser")
+
+
+def collect_makeitfrom_material_links(start_urls: list[str], max_pages: int = 400) -> list[str]:
+    if BeautifulSoup is None:
+        log.warning("beautifulsoup4 not available; skipping MakeItFrom crawl")
+        return []
+
+    from collections import deque
+    from urllib.parse import urljoin
+
+    queue = deque([(u, 0) for u in start_urls])
+    seen_pages = set()
+    material_links = []
+    seen_materials = set()
+
+    while queue and len(seen_pages) < max_pages:
+        url, depth = queue.popleft()
+        if url in seen_pages or depth > 2:
+            continue
+        seen_pages.add(url)
+        html = fetch_html(url)
+        if not html:
+            continue
+        soup = soup_from_html(html)
+        if soup is None:
+            continue
+
+        for a in soup.find_all("a", href=True):
+            href = a.get("href", "")
+            if not href:
+                continue
+            full = urljoin(url, href)
+            if "/material-properties/" in full:
+                if full not in seen_materials:
+                    seen_materials.add(full)
+                    material_links.append(full)
+            elif "/material-group/" in full and depth < 2:
+                if full not in seen_pages:
+                    queue.append((full, depth + 1))
+
+    return material_links
+
+
+def find_text_value(lines: list[str], labels: list[str], lookahead: int = 6) -> Optional[str]:
+    normalized_labels = [normalize_text_for_match(l) for l in labels]
+    for i, line in enumerate(lines):
+        ln = normalize_text_for_match(line)
+        if any(lab == ln or lab in ln for lab in normalized_labels):
+            for j in range(i + 1, min(i + lookahead + 1, len(lines))):
+                cand = lines[j].strip()
+                if not cand:
+                    continue
+                if re.search(r"\d", cand):
+                    return cand
+    return None
+
+
+def classify_makeitfrom_page(title: str, url: str) -> tuple[str, str]:
+    t = normalize_text_for_match(title)
+    u = normalize_text_for_match(url)
+    if any(k in t or k in u for k in ["laminate", "fiber", "carbon-carbon", "carbon fiber", "gfrp", "cfrp", "nema"]):
+        return "Composite", "Laminate"
+    if any(k in t or k in u for k in ["thermoplastic", "plastic", "polyamide", "nylon", "polycarbonate", "pei", "ptfe", "pe", "pp", "abs", "peek", "pbi", "pom", "fluoroplastic", "thermoset"]):
+        return "Polymer", "Thermoplastic"
+    if any(k in t or k in u for k in ["ceramic", "glass", "silicon carbide", "silicon nitride", "boron carbide", "aluminum nitride", "alumina", "zro2", "cordierite", "sialon"]):
+        return "Ceramic", "Engineering"
+    return "Metal", "Alloy"
+
+
+def parse_makeitfrom_material_page(url: str) -> Optional[dict]:
+    html = fetch_html(url)
+    if not html:
+        return None
+    soup = soup_from_html(html)
+    if soup is None:
+        return None
+
+    title_el = soup.find("h1")
+    title = title_el.get_text(" ", strip=True) if title_el else url.rsplit("/", 1)[-1]
+    lines = [ln.strip() for ln in soup.get_text("\n").splitlines() if ln.strip()]
+
+    cat, subcat = classify_makeitfrom_page(title, url)
+    row = {
+        "name": title,
+        "formula": title,
+        "elements": parse_elements_from_formula(title),
+        "category": cat,
+        "subcategory": subcat,
+        "density": None,
+        "melting_point": None,
+        "boiling_point": None,
+        "thermal_conductivity": None,
+        "specific_heat": None,
+        "thermal_expansion": None,
+        "electrical_resistivity": None,
+        "yield_strength": None,
+        "tensile_strength": None,
+        "youngs_modulus": None,
+        "hardness_vickers": None,
+        "poissons_ratio": None,
+        "fracture_toughness": None,
+        "weibull_modulus": None,
+        "interlaminar_shear_strength": None,
+        "fiber_volume_fraction": None,
+        "processing_temp_min_c": None,
+        "processing_temp_max_c": None,
+        "glass_transition_temp": None,
+        "heat_deflection_temp": None,
+        "source": "MakeItFrom (scraped)",
+        "notes": url,
+        "mp_material_id": None,
+    }
+
+    property_map = [
+        ("density", ["density"]),
+        ("youngs_modulus", ["elastic (young's, tensile) modulus", "young's modulus", "elastic modulus", "flexural modulus"]),
+        ("yield_strength", ["tensile strength: yield (proof)", "yield strength", "compressive strength"]),
+        ("tensile_strength", ["tensile strength: ultimate (uts)", "tensile strength"]),
+        ("thermal_conductivity", ["thermal conductivity"]),
+        ("thermal_expansion", ["thermal expansion"]),
+        ("specific_heat", ["specific heat capacity"]),
+        ("melting_point", ["melting onset (solidus)", "melting completion (liquidus)"]),
+        ("glass_transition_temp", ["glass transition temperature"]),
+        ("heat_deflection_temp", ["maximum temperature: mechanical"]),
+        ("poissons_ratio", ["poisson's ratio"]),
+        ("fracture_toughness", ["fracture toughness"]),
+        ("interlaminar_shear_strength", ["shear strength"]),
+        ("fiber_volume_fraction", ["fiber volume fraction"]),
+        ("electrical_resistivity", ["electrical resistivity order of magnitude", "electrical resistivity"]),
+    ]
+
+    for field, labels in property_map:
+        text = find_text_value(lines, labels)
+        if text:
+            row[field] = convert_makeitfrom_value(field, text)
+
+    # Add polymer processing temperatures from service temperature fields when present.
+    if row["category"] == "Polymer":
+        min_text = find_text_value(lines, ["maximum temperature: mechanical"])
+        if min_text:
+            row["processing_temp_min_c"] = convert_makeitfrom_value("maximum temperature: mechanical", min_text)
+        max_text = find_text_value(lines, ["melting onset (solidus)", "maximum temperature: mechanical"])
+        if max_text:
+            row["processing_temp_max_c"] = convert_makeitfrom_value("melting onset (solidus)", max_text)
+
+    # Use shear strength for composite laminates.
+    if row["category"] == "Composite" and row.get("interlaminar_shear_strength") is None:
+        shear = find_text_value(lines, ["shear strength"])
+        if shear:
+            row["interlaminar_shear_strength"] = convert_makeitfrom_value("shear strength", shear)
+
+    # Keep only rows with at least one useful property.
+    useful_fields = [
+        "density", "melting_point", "thermal_conductivity", "thermal_expansion",
+        "yield_strength", "tensile_strength", "youngs_modulus", "interlaminar_shear_strength",
+        "glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", "processing_temp_max_c",
+    ]
+    if not any(row.get(f) is not None for f in useful_fields):
+        return None
+
+    return row
+
+
+def scrape_makeitfrom_catalog(start_urls: list[str], max_materials: int = 500) -> list[dict]:
+    links = collect_makeitfrom_material_links(start_urls)
+    rows: list[dict] = []
+    seen_names = set()
+    for url in links:
+        row = parse_makeitfrom_material_page(url)
+        if not row:
+            continue
+        key = normalize_key(row["name"])
+        if key in seen_names:
+            continue
+        seen_names.add(key)
+        rows.append(row)
+        if len(rows) >= max_materials:
+            break
+
+    log.info(f"Scraped {len(rows)} rows from MakeItFrom")
+    return rows
+
+
+def scrape_wikipedia_elements() -> list[dict]:
+    """Scrape elemental material properties from Wikipedia table."""
+    try:
+        resp = requests.get(
+            WIKI_ELEMENTS_URL,
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text))
+    except Exception as e:
+        log.warning(f"Failed scraping {WIKI_ELEMENTS_URL}: {e}")
+        return []
+
+    selected = None
+    for t in tables:
+        cols = [str(c) for c in t.columns]
+        has_symbol = bool(find_col(cols, ["symbol", "sym.", "sym"]))
+        has_density = bool(find_col(cols, ["density"]))
+        has_melting = bool(find_col(cols, ["melting"]))
+        if has_symbol and (has_density or has_melting):
+            selected = t
+            break
+
+    if selected is None:
+        log.warning("Could not locate a usable elements table on Wikipedia")
+        return []
+
+    cols = [str(c) for c in selected.columns]
+    c_symbol = find_col(cols, ["symbol", "sym.", "sym"])
+    c_name = find_col(cols, ["name"])
+    c_density = find_col(cols, ["density"])
+    c_melting = find_col(cols, ["melting"])
+    c_boiling = find_col(cols, ["boiling"])
+
+    rows: list[dict] = []
+    for _, r in selected.iterrows():
+        symbol = str(r.get(c_symbol, "")).strip() if c_symbol else ""
+        if not symbol or len(symbol) > 3:
+            continue
+
+        name = str(r.get(c_name, symbol)).strip() if c_name else symbol
+        density = extract_first_number(r.get(c_density)) if c_density else None
+        melting = extract_first_number(r.get(c_melting)) if c_melting else None
+        boiling = extract_first_number(r.get(c_boiling)) if c_boiling else None
+
+        rows.append({
+            "name": name,
+            "formula": symbol,
+            "elements": [symbol],
+            "density": density,
+            "melting_point": melting,
+            "boiling_point": boiling,
+            "source": "Wikipedia (scraped)",
+            "notes": "Scraped from List of chemical elements",
+        })
+
+    log.info(f"Scraped {len(rows)} elemental rows from Wikipedia")
+    return rows
+
+
+def scrape_periodic_table_json() -> list[dict]:
+    """Scrape elemental properties from a public GitHub-hosted JSON dataset."""
+    try:
+        resp = requests.get(
+            PERIODIC_TABLE_JSON_URL,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:
+        log.warning(f"Failed scraping periodic dataset: {e}")
+        return []
+
+    elements = payload.get("elements") if isinstance(payload, dict) else None
+    if not isinstance(elements, list):
+        return []
+
+    rows: list[dict] = []
+    for el in elements:
+        symbol = str(el.get("symbol", "")).strip()
+        if not symbol:
+            continue
+        rows.append({
+            "name": str(el.get("name", symbol)).strip(),
+            "formula": symbol,
+            "elements": [symbol],
+            "density": safe_float(el.get("density")),
+            "melting_point": safe_float(el.get("melt")),
+            "boiling_point": safe_float(el.get("boil")),
+            "source": "Periodic-Table-JSON (scraped)",
+            "notes": "Scraped from public GitHub dataset",
+        })
+
+    log.info(f"Scraped {len(rows)} elemental rows from Periodic-Table-JSON")
+    return rows
+
+
+def scrape_jarvis_3d(max_rows: int = SCRAPE_MAX_ROWS) -> list[dict]:
+    """Scrape a large public materials dataset from JARVIS Figshare."""
+    if jarvis_figshare_data is None:
+        log.warning("jarvis-tools not installed; skipping JARVIS scrape source")
+        return []
+
+    try:
+        raw = jarvis_figshare_data("dft_3d")
+    except Exception as e:
+        log.warning(f"Failed scraping JARVIS dataset: {e}")
+        return []
+
+    rows: list[dict] = []
+    for r in raw:
+        formula = str(r.get("formula", "")).strip()
+        if not formula:
+            continue
+
+        density = safe_float(r.get("density"))
+        if density is None:
+            # Keep only entries with at least one key property to avoid dropping later.
+            continue
+
+        k = safe_float(r.get("bulk_modulus_kv"))
+        g = safe_float(r.get("shear_modulus_gv"))
+        youngs = None
+        if k is not None and g is not None and (3 * k + g) != 0:
+            # Isotropic estimate: E = 9KG/(3K+G)
+            youngs = (9.0 * k * g) / (3.0 * k + g)
+
+        rows.append({
+            "name": formula,
+            "formula": formula,
+            "elements": parse_elements_from_formula(formula),
+            "density": density,
+            "melting_point": None,
+            "boiling_point": None,
+            "youngs_modulus": youngs,
+            "source": "JARVIS dft_3d (scraped)",
+            "notes": str(r.get("jid", "")),
+        })
+
+        if len(rows) >= max_rows:
+            break
+
+    log.info(f"Scraped {len(rows)} rows from JARVIS dft_3d")
+    return rows
+
+
+def fetch_from_web() -> list[dict]:
+    """Fetch internet-scraped rows only (no API calls)."""
+    rows = []
+    rows.extend(scrape_jarvis_3d())
+    rows.extend(scrape_periodic_table_json())
+    # MakeItFrom scraper disabled due to network connectivity issues
+    # rows.extend(scrape_makeitfrom_catalog(MAKEITFROM_GROUP_URLS, max_materials=700))
+    if not rows:
+        rows.extend(scrape_wikipedia_elements())
+    return rows
+
+
 def normalize_key(s: str) -> str:
     if s is None:
         return ""
@@ -223,26 +649,133 @@ def normalize_key(s: str) -> str:
 
 
 def load_polymer_enrichment() -> pd.DataFrame:
-    """Load optional polymer Tg/HDT enrichment table."""
-    if not POLYMER_ENRICHMENT_CSV.exists():
-        log.warning(f"Polymer enrichment file not found: {POLYMER_ENRICHMENT_CSV}")
-        return pd.DataFrame()
-
-    df = pd.read_csv(POLYMER_ENRICHMENT_CSV)
-    required = {"name", "formula", "glass_transition_temp", "heat_deflection_temp"}
-    missing = required - set(df.columns)
-    if missing:
-        log.warning(f"Polymer enrichment missing required columns: {sorted(missing)}")
-        return pd.DataFrame()
-
-    for col in ["glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", "processing_temp_max_c", "crystallinity"]:
+    """Load optional polymer Tg/HDT enrichment table. Now handles multiple category enrichment."""
+    # Try loading comprehensive enrichment first (all categories), then fallback to polymer-only
+    enrichment_files = [
+        Path(__file__).parent / "comprehensive_enrichment.csv",
+        POLYMER_ENRICHMENT_CSV,
+    ]
+    
+    df = pd.DataFrame()
+    for csv_path in enrichment_files:
+        if csv_path.exists():
+            try:
+                df = pd.read_csv(csv_path)
+                log.info(f"Loaded enrichment from {csv_path.name}: {len(df)} rows")
+                break
+            except Exception as e:
+                log.warning(f"Failed to load {csv_path}: {e}")
+    
+    if df.empty:
+        log.warning("No enrichment files found")
+        return df
+    
+    # Normalize numeric columns
+    for col in ["density", "melting_point", "thermal_conductivity", "specific_heat", "thermal_expansion",
+                "yield_strength", "tensile_strength", "youngs_modulus", "hardness_vickers",
+                "glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", 
+                "processing_temp_max_c", "crystallinity", "interlaminar_shear_strength", 
+                "fiber_volume_fraction", "fracture_toughness"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+    
+    # Convert processing temps from Celsius to Kelvin
+    for col in ["processing_temp_min_c", "processing_temp_max_c"]:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda v: v + 273.15 if pd.notna(v) and v < 200 else v)
+    
+    # Only convert Tg/HDT if they're in Celsius (< 200K means unrealistic)
+    for col in ["glass_transition_temp", "heat_deflection_temp"]:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda v: v + 273.15 if pd.notna(v) and v < 200 else v)
+    
+    # Normalize keys for deduplication
+    df["name_key"] = df["name"].apply(normalize_key) if "name" in df.columns else ""
+    df["formula_key"] = df["formula"].apply(normalize_key) if "formula" in df.columns else ""
+    log.info(f"Loaded enrichment with {len(df)} rows (all categories)")
+    return df
 
+
+def _canonicalize_enrichment_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
+    """Normalize enrichment schema from CSV/API into canonical columns."""
+    if df.empty:
+        return df
+
+    alias = {
+        "name": ["name", "material", "material_name", "polymer_name"],
+        "formula": ["formula", "chemical_formula", "grade", "type"],
+        "glass_transition_temp": [
+            "glass_transition_temp", "tg", "tg_k", "tg_kelvin", "glass_transition_temperature",
+        ],
+        "heat_deflection_temp": [
+            "heat_deflection_temp", "hdt", "hdt_k", "hdt_kelvin", "heat_deflection_temperature",
+        ],
+        "processing_temp_min_c": ["processing_temp_min_c", "processing_min_c", "print_temp_min_c"],
+        "processing_temp_max_c": ["processing_temp_max_c", "processing_max_c", "print_temp_max_c"],
+        "crystallinity": ["crystallinity", "crystallinity_percent", "x_c"],
+    }
+
+    renames = {}
+    lower_to_col = {str(c).strip().lower(): c for c in df.columns}
+    for canonical, choices in alias.items():
+        for c in choices:
+            if c.lower() in lower_to_col:
+                renames[lower_to_col[c.lower()]] = canonical
+                break
+    df = df.rename(columns=renames)
+
+    for required in ["name", "formula", "glass_transition_temp", "heat_deflection_temp"]:
+        if required not in df.columns:
+            df[required] = None
+
+    for col in [
+        "glass_transition_temp",
+        "heat_deflection_temp",
+        "processing_temp_min_c",
+        "processing_temp_max_c",
+        "crystallinity",
+    ]:
+        if col not in df.columns:
+            df[col] = None
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["name"] = df["name"].fillna("").astype(str)
+    df["formula"] = df["formula"].fillna("").astype(str)
     df["name_key"] = df["name"].apply(normalize_key)
     df["formula_key"] = df["formula"].apply(normalize_key)
-    log.info(f"Loaded polymer enrichment rows: {len(df)}")
-    return df
+    df["source"] = source_name
+
+    keep_cols = [
+        "name",
+        "formula",
+        "category",
+        "subcategory",
+        "glass_transition_temp",
+        "heat_deflection_temp",
+        "processing_temp_min_c",
+        "processing_temp_max_c",
+        "crystallinity",
+        "density",
+        "melting_point",
+        "boiling_point",
+        "thermal_conductivity",
+        "specific_heat",
+        "thermal_expansion",
+        "electrical_resistivity",
+        "yield_strength",
+        "tensile_strength",
+        "youngs_modulus",
+        "hardness_vickers",
+        "poissons_ratio",
+        "interlaminar_shear_strength",
+        "fiber_volume_fraction",
+        "fracture_toughness",
+        "name_key",
+        "formula_key",
+        "source",
+    ]
+    available_cols = [c for c in keep_cols if c in df.columns]
+    return df[available_cols]
 
 
 # ── Curated Dataset ───────────────────────────────────────────────────────
@@ -663,59 +1196,44 @@ def load_curated_supplement() -> pd.DataFrame:
     return df
 
 
-# ── Main ──────────────────────────────────────────────────────────────────
-def fetch_from_api() -> list[dict]:
-    """Fetch from Materials Project REST API v2."""
-    client = MPRestClient(MP_API_KEY)
-
-    # Test connection first
-    log.info("Testing API connection …")
-    try:
-        test = client.get("/materials/summary/", params={
-            "_fields": "material_id,formula_pretty,density",
-            "_limit": 1,
-        })
-        if "data" in test:
-            log.info("✅  API connection successful")
-        else:
-            log.warning(f"Unexpected API response: {list(test.keys())}")
-    except Exception as e:
-        log.error(f"API test failed: {e}")
-        return []  # Fall back to curated only
-
-    return client.fetch_summary(limit=15000)
-
-
 def build_api_rows(raw_rows: list[dict]) -> pd.DataFrame:
-    """Convert raw API rows to clean DataFrame."""
+    """Convert raw scraped rows to clean DataFrame."""
     rows = []
     for r in raw_rows:
         elements = r.get("elements", [])
         formula  = r.get("formula", "") or ""
+        name = r.get("name", formula) or formula
         category, subcategory = classify_category(formula, elements)
 
         rows.append({
             "mp_material_id"        : r.get("mp_material_id"),
-            "name"                  : formula,
+            "name"                  : name,
             "formula"               : formula,
             "category"              : category,
             "subcategory"           : subcategory,
             "density"               : safe_float(r.get("density")),
             "glass_transition_temp" : None,
             "heat_deflection_temp"  : None,
-            "melting_point"         : None,
-            "boiling_point"         : None,
+            "melting_point"         : safe_float(r.get("melting_point")),
+            "boiling_point"         : safe_float(r.get("boiling_point")),
             "thermal_conductivity"  : None,
             "specific_heat"         : None,
             "thermal_expansion"     : None,
             "electrical_resistivity": None,
             "yield_strength"        : None,
             "tensile_strength"      : None,
-            "youngs_modulus"        : None,
+            "youngs_modulus"        : safe_float(r.get("youngs_modulus")),
             "hardness_vickers"      : None,
             "poissons_ratio"        : None,
-            "source"                : "Materials Project",
-            "notes"                 : None,
+            "processing_temp_min_c" : safe_float(r.get("processing_temp_min_c")),
+            "processing_temp_max_c" : safe_float(r.get("processing_temp_max_c")),
+            "crystallinity"         : safe_float(r.get("crystallinity")),
+            "fracture_toughness"    : safe_float(r.get("fracture_toughness")),
+            "weibull_modulus"       : safe_float(r.get("weibull_modulus")),
+            "interlaminar_shear_strength": safe_float(r.get("interlaminar_shear_strength")),
+            "fiber_volume_fraction"  : safe_float(r.get("fiber_volume_fraction")),
+            "source"                : r.get("source", "Web Scraped"),
+            "notes"                 : r.get("notes"),
         })
     return pd.DataFrame(rows)
 
@@ -732,7 +1250,12 @@ def merge_datasets(api_df: pd.DataFrame, curated_df: pd.DataFrame) -> pd.DataFra
     combined.drop_duplicates(subset=["formula"], keep="first", inplace=True)
 
     # Drop rows with NO useful properties
-    prop_cols = ["density","glass_transition_temp","heat_deflection_temp","melting_point","thermal_conductivity","electrical_resistivity"]
+    prop_cols = [
+        "density","glass_transition_temp","heat_deflection_temp","melting_point",
+        "thermal_conductivity","electrical_resistivity","youngs_modulus",
+        "tensile_strength","yield_strength","fracture_toughness",
+        "interlaminar_shear_strength","specific_heat","thermal_expansion",
+    ]
     mask = combined[prop_cols].notna().any(axis=1)
     combined = combined[mask].copy()
 
@@ -742,49 +1265,49 @@ def merge_datasets(api_df: pd.DataFrame, curated_df: pd.DataFrame) -> pd.DataFra
 
 
 def apply_polymer_enrichment(df: pd.DataFrame, enrich_df: pd.DataFrame) -> pd.DataFrame:
-    """Apply Tg/HDT enrichment to polymer rows by normalized name/formula keys."""
+    """Apply enrichment to rows by exact name/formula match (supports all categories, handles duplicates)."""
     if enrich_df.empty:
         return df
-
-    for col in [
-        "glass_transition_temp",
-        "heat_deflection_temp",
-        "processing_temp_min_c",
-        "processing_temp_max_c",
-        "crystallinity",
-    ]:
+    
+    required_cols = [
+        "glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", "processing_temp_max_c",
+        "crystallinity", "interlaminar_shear_strength", "fiber_volume_fraction", "fracture_toughness"
+    ]
+    for col in required_cols:
         if col not in df.columns:
             df[col] = None
-
+    
     df["name_key"] = df["name"].apply(normalize_key)
     df["formula_key"] = df["formula"].apply(normalize_key)
-
-    e_by_name = enrich_df.set_index("name_key").to_dict("index")
-    e_by_formula = enrich_df.set_index("formula_key").to_dict("index")
-
+    enrich_df_local = enrich_df.copy()
+    enrich_df_local["name_key"] = enrich_df_local["name"].apply(normalize_key)
+    enrich_df_local["formula_key"] = enrich_df_local["formula"].apply(normalize_key)
+    
     updates = 0
     for i, row in df.iterrows():
-        if str(row.get("category", "")).lower() != "polymer":
-            continue
-
         key_name = row.get("name_key", "")
         key_formula = row.get("formula_key", "")
-        src = None
-        if key_name and key_name in e_by_name:
-            src = e_by_name[key_name]
-        elif key_formula and key_formula in e_by_formula:
-            src = e_by_formula[key_formula]
-
-        if not src:
-            continue
-
-        for col in ["glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", "processing_temp_max_c", "crystallinity"]:
-            if col in src and pd.notna(src[col]):
-                df.at[i, col] = src[col]
-        updates += 1
-
+        row_cat = str(row.get("category", "")).lower()
+        
+        matches = enrich_df_local[enrich_df_local["name_key"] == key_name] if key_name else pd.DataFrame()
+        
+        if matches.empty and key_formula and "category" in enrich_df_local.columns:
+            matches = enrich_df_local[
+                (enrich_df_local["formula_key"] == key_formula) & 
+                (enrich_df_local["category"].str.lower() == row_cat)
+            ]
+        elif matches.empty and key_formula:
+            matches = enrich_df_local[enrich_df_local["formula_key"] == key_formula]
+        
+        if not matches.empty:
+            src = matches.iloc[0].to_dict()
+            for col in required_cols:
+                if col in src and pd.notna(src[col]):
+                    df.at[i, col] = src[col]
+            updates += 1
+    
     df.drop(columns=["name_key", "formula_key"], inplace=True, errors="ignore")
-    log.info(f"Applied polymer enrichment to {updates} rows")
+    log.info(f"Applied enrichment to {updates} rows (all categories)")
     return df
 
 
@@ -793,27 +1316,42 @@ def main():
     log.info("Smart Alloy Selector — Materials Data Fetcher v2")
     log.info("=" * 60)
 
-    # 1. Fetch from API
-    api_rows = []
-    if MP_API_KEY:
-        log.info(f"MP API key: {MP_API_KEY[:8]}…")
-        try:
-            api_rows = fetch_from_api()
-        except Exception as e:
-            log.warning(f"API fetch error: {e} — using curated only")
+    # 1. Fetch from internet scraping only (no API)
+    scraped_rows = []
+    try:
+        scraped_rows = fetch_from_web()
+    except Exception as e:
+        log.warning(f"Web scraping fetch error: {e} — using curated only")
 
-    api_df = build_api_rows(api_rows) if api_rows else pd.DataFrame()
+    scraped_df = build_api_rows(scraped_rows) if scraped_rows else pd.DataFrame()
 
     # 2. Load curated supplement
     log.info("Loading curated dataset …")
     curated_df = load_curated_supplement()
     log.info(f"Curated: {len(curated_df)} materials")
 
-    # 3. Merge
-    final_df = merge_datasets(api_df, curated_df)
+    # 2b. Load enrichment materials (these get added as new rows + used for enrichment)
+    enrich_df = _canonicalize_enrichment_df(load_polymer_enrichment(), "CSV")
 
-    # 3b. Enrich polymers with Tg/HDT and processing fields if enrichment file exists
-    enrich_df = load_polymer_enrichment()
+    # 3. Merge scraped + curated
+    final_df = merge_datasets(scraped_df, curated_df)
+    
+    # 3b. Add enrichment materials that don't exist in final_df (expand database)
+    before_enrich = len(final_df)
+    if not enrich_df.empty:
+        final_df["name_key"] = final_df["name"].apply(normalize_key)
+        for _, erow in enrich_df.iterrows():
+            ekey = normalize_key(erow.get("name", ""))
+            if ekey and ekey not in final_df["name_key"].values:
+                # Add this enrichment row as a new material
+                erow_dict = erow.to_dict()
+                erow_dict["source"] = erow.get("source", "Enrichment")
+                final_df = pd.concat([final_df, pd.DataFrame([erow_dict])], ignore_index=True)
+        final_df.drop(columns=["name_key"], inplace=True, errors="ignore")
+        post_enrich = len(final_df)
+        log.info(f"Added {post_enrich - before_enrich} new materials from enrichment")
+    
+    # 3c. Enrich existing rows with enrichment data (fill in missing fields)
     final_df = apply_polymer_enrichment(final_df, enrich_df)
 
     # 4. Save

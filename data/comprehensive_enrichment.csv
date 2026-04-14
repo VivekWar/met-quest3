@@ -1,0 +1,45 @@
+name,formula,category,subcategory,density,melting_point,thermal_conductivity,specific_heat,thermal_expansion,yield_strength,tensile_strength,youngs_modulus,hardness_vickers,glass_transition_temp,heat_deflection_temp,processing_temp_min_c,processing_temp_max_c,crystallinity,interlaminar_shear_strength,fiber_volume_fraction,fracture_toughness,source
+PTFE Teflon,(C2F4)n,Polymer,Fluoropolymer,2.2,600.0,0.25,,135.0,,31.0,0.5,,,,340.0,380.0,95,,,Curated Datasheet
+PEEK,(C19H12O3)n,Polymer,Thermoplastic,1.32,334.0,0.25,,47.0,91.0,100.0,3.6,,416.15,433.15,360.0,410.0,30,,,Curated Datasheet
+PLA,C3H4O2,Polymer,Thermoplastic,1.24,453.0,0.16,,68.0,40.0,50.0,2.7,,333.15,328.15,190.0,220.0,10,,,Curated Datasheet
+PETG,C3H4O2,Polymer,Thermoplastic,1.27,505.0,0.19,,71.0,35.0,60.0,2.1,,353.15,343.15,230.0,260.0,0,,,Curated Datasheet
+ABS,C4H6N,Polymer,Thermoplastic,1.05,513.0,0.22,,105.0,25.0,70.0,2.3,,378.15,368.15,230.0,260.0,0,,,Curated Datasheet
+Nylon 6/6 PA66,C6H11NO,Polymer,Thermoplastic,1.14,528.0,0.25,,150.0,75.0,90.0,2.8,,323.15,343.15,250.0,290.0,35,,,Curated Datasheet
+Polycarbonate PC,C3H2O2,Polymer,Thermoplastic,1.2,503.0,0.2,,108.0,62.0,65.0,2.3,,420.15,401.15,260.0,320.0,0,,,Curated Datasheet
+Polypropylene PP,C3H6,Polymer,Thermoplastic,0.905,433.0,0.22,,100.0,40.0,70.0,1.5,,263.15,333.15,220.0,250.0,50,,,Curated Datasheet
+Ultem PEI,C13H10N2O,Polymer,Thermoplastic,1.27,644.0,0.22,,134.0,83.0,106.0,2.7,,490.15,473.15,340.0,390.0,0,,,Curated Datasheet
+Polystyrene PS,C8H8,Polymer,Thermoplastic,1.05,513.0,0.13,,103.0,35.0,50.0,3.3,,373.15,363.15,200.0,240.0,0,,,Curated Datasheet
+PET Polyester,C10H8O4,Polymer,Thermoplastic,1.38,523.0,0.3,,108.0,50.0,80.0,2.7,,342.15,353.15,250.0,290.0,20,,,Curated Datasheet
+Epoxy Resin,C21H25ClN2O5,Polymer,Thermoset,1.2,473.0,0.2,,1200.0,50.0,80.0,3.0,,453.15,,200.0,250.0,100,,,Curated Datasheet
+Carbon Fiber (unconstrained),C,Composite,Fiber,1.6,,160.0,,1.0,,3500.0,230.0,,,,,,60,,3.0,Curated Datasheet
+CFRP Unidirectional (60%),C/Epoxy,Composite,PMC,1.55,,5.0,,0.5,,1500.0,135.0,,,,230.0,280.0,,60.0,60,80.0,Curated Datasheet
+GFRP Woven (50%),SiO2/Epoxy,Composite,FRP,1.8,,0.35,,11.0,,900.0,40.0,,,,220.0,270.0,,50.0,50,45.0,Curated Datasheet
+Carbon/PEEK (40%),C/PEEK,Composite,PMC,1.45,,12.0,,2.0,,850.0,120.0,,,,300.0,350.0,,55.0,40,120.0,Curated Datasheet
+Glass/Epoxy Laminate,SiO2/Epoxy,Composite,Laminate,1.9,,1.4,,12.0,,600.0,38.0,,,,250.0,300.0,,45.0,50,35.0,Curated Datasheet
+6061-T6 Aluminum Alloy,AlL,Metal,Aluminum Alloy,2.7,933.0,167.0,897,23.6,275.0,310.0,69.0,95,,,220.0,250.0,,,,2.5,ASM Handbook
+7075-T6 Aluminum Alloy,AlZn,Metal,Aluminum Alloy,2.81,778.0,130.0,960,23.4,505.0,570.0,72.0,150,,,240.0,290.0,,,,2.8,ASM Handbook
+2024-T4 Aluminum Alloy,AlCu,Metal,Aluminum Alloy,2.78,775.0,121.0,875,23.5,325.0,470.0,73.0,120,,,230.0,280.0,,,,2.6,ASM Handbook
+316 Stainless Steel,FeCrNi,Metal,Stainless Steel,8.0,1673.0,16.3,500,15.9,170.0,515.0,193.0,217,,,600.0,800.0,,,,50.0,ASM Handbook
+304 Stainless Steel,FeCrNi,Metal,Stainless Steel,8.0,1673.0,16.3,500,15.8,205.0,530.0,193.0,217,,,600.0,800.0,,,,45.0,ASM Handbook
+410 Stainless Steel,FeCr,Metal,Stainless Steel,7.75,1760.0,24.8,460,10.8,240.0,620.0,200.0,221,,,700.0,950.0,,,,35.0,ASM Handbook
+Titanium Grade 2,Ti,Metal,Titanium,4.51,1941.0,21.9,520,8.6,345.0,435.0,116.0,250,,,800.0,1000.0,,,,3.5,ASM Handbook
+Ti-6Al-4V ELI,TiAlV,Metal,Titanium Alloy,4.43,1941.0,7.4,526,8.6,880.0,950.0,103.0,334,,,800.0,1050.0,,,,6.0,ASM Handbook
+Inconel 625,NiCrMo,Metal,Nickel Alloy,8.44,1573.0,9.8,410,12.6,415.0,895.0,203.0,163,,,1100.0,1250.0,,,,180.0,ASM Handbook
+Hastelloy C-276,NiCrMo,Metal,Nickel Alloy,8.89,1613.0,9.8,427,12.8,448.0,930.0,210.0,195,,,1150.0,1300.0,,,,200.0,ASM Handbook
+Copper (pure),Cu,Metal,Pure Element,8.96,1358.0,401.0,385,16.5,70.0,220.0,120.0,35,,,300.0,400.0,,,,30.0,ASM Handbook
+Brass (70-30),CuZn,Metal,Brass,8.5,1180.0,110.0,385,20.0,145.0,330.0,97.0,95,,,450.0,550.0,,,,25.0,ASM Handbook
+Aluminum Oxide Ceramic,Al2O3,Ceramic,Oxide,3.96,2327.0,30.0,880,8.1,,400.0,393.0,1900,,,1500.0,1750.0,100,,,6.0,ASM Handbook
+Silicon Carbide,SiC,Ceramic,Non-Oxide,3.21,2700.0,120.0,840,4.3,,600.0,410.0,2500,,,1600.0,1850.0,100,,,3.5,ASM Handbook
+Silicon Nitride,Si3N4,Ceramic,Non-Oxide,3.18,2173.0,30.0,795,3.0,,900.0,330.0,1600,,,1500.0,1700.0,100,,,5.0,ASM Handbook
+Zirconia Toughened Ceramic,ZrO2,Ceramic,Oxide,6.1,2973.0,2.0,450,10.0,,1000.0,250.0,1200,,,1400.0,1600.0,95,,,600.0,ASM Handbook
+Boron Carbide,B4C,Ceramic,Non-Oxide,2.51,2723.0,29.0,1350,4.5,,400.0,450.0,2800,,,1500.0,1700.0,100,,,3.0,ASM Handbook
+Glass (Soda-Lime),SiO2Na,Ceramic,Silicate,2.52,1973.0,1.0,840,9.0,,60.0,72.0,600,,,400.0,600.0,0,,,1.5,ASM Handbook
+Glass Ceramic (Cordierite),MgAl2Si5O18,Ceramic,Glass-Ceramic,2.3,1773.0,1.3,840,1.3,,100.0,110.0,650,,,800.0,1000.0,95,,,2.0,ASM Handbook
+Cast Iron (Ductile),Fe,Metal,Cast Iron,7.14,1473.0,42.0,450,12.1,275.0,415.0,169.0,160,,,850.0,1050.0,,,,6.0,ASM Handbook
+Cast Iron (Gray),Fe,Metal,Cast Iron,6.8,1373.0,50.0,420,11.0,,125.0,110.0,160,,,700.0,900.0,,,,4.0,ASM Handbook
+Mild Steel AISI 1020,Fe,Metal,Carbon Steel,7.85,1790.0,50.0,476,12.2,210.0,380.0,200.0,95,,,800.0,1000.0,,,,25.0,ASM Handbook
+Medium Carbon Steel AISI 1050,Fe,Metal,Carbon Steel,7.84,1823.0,49.0,480,12.0,310.0,630.0,210.0,167,,,900.0,1100.0,,,,50.0,ASM Handbook
+Magnesium Alloy AZ91D,MgAl,Metal,Magnesium Alloy,1.81,868.0,51.0,1025,25.0,160.0,230.0,45.0,80,,,450.0,550.0,,,,3.5,ASM Handbook
+Molybdenum,Mo,Metal,Refractory,10.28,2896.0,138.0,251,4.8,324.0,630.0,329.0,230,,,1200.0,1500.0,,,,180.0,ASM Handbook
+Tungsten,W,Metal,Refractory,19.25,3695.0,173.0,134,4.5,750.0,1500.0,411.0,360,,,1500.0,1800.0,,,,200.0,ASM Handbook
+Beryllium,Be,Metal,Refractory,1.85,1560.0,200.0,1825,11.3,345.0,380.0,318.0,110,,,1200.0,1450.0,,,,5.0,ASM Handbook

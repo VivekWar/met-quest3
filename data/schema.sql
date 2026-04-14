@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS materials (
     youngs_modulus           FLOAT,             -- GPa
     hardness_vickers         FLOAT,             -- HV
     poissons_ratio           FLOAT,
+    processing_temp_min_c    FLOAT,
+    processing_temp_max_c    FLOAT,
+    crystallinity            FLOAT,
+    crystal_system           TEXT,
+    fracture_toughness       FLOAT,
+    weibull_modulus          FLOAT,
+    interlaminar_shear_strength FLOAT,
+    fiber_volume_fraction    FLOAT,
 
     -- Metadata
     source                   TEXT DEFAULT 'Materials Project',
@@ -65,6 +73,14 @@ CREATE INDEX IF NOT EXISTS idx_mat_name_trgm
 -- Backward-compatible migration for existing DBs
 ALTER TABLE materials ADD COLUMN IF NOT EXISTS glass_transition_temp FLOAT;
 ALTER TABLE materials ADD COLUMN IF NOT EXISTS heat_deflection_temp FLOAT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS processing_temp_min_c FLOAT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS processing_temp_max_c FLOAT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS crystallinity FLOAT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS crystal_system TEXT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS fracture_toughness FLOAT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS weibull_modulus FLOAT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS interlaminar_shear_strength FLOAT;
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS fiber_volume_fraction FLOAT;
 
 -- ----------------------------------------------------------------
 --  Query log — track what users ask (useful for evaluation)

@@ -106,6 +106,9 @@ def seed_materials(conn, df: pd.DataFrame):
         "electrical_resistivity",
         "yield_strength", "tensile_strength", "youngs_modulus",
         "hardness_vickers", "poissons_ratio",
+        "processing_temp_min_c", "processing_temp_max_c", "crystallinity",
+        "crystal_system", "fracture_toughness", "weibull_modulus",
+        "interlaminar_shear_strength", "fiber_volume_fraction",
         "source", "notes",
     ]
 
@@ -129,7 +132,11 @@ def seed_materials(conn, df: pd.DataFrame):
                     density, glass_transition_temp, heat_deflection_temp, melting_point, boiling_point, thermal_conductivity,
                     specific_heat, thermal_expansion, electrical_resistivity,
                     yield_strength, tensile_strength, youngs_modulus,
-                    hardness_vickers, poissons_ratio, source, notes)
+                    hardness_vickers, poissons_ratio,
+                    processing_temp_min_c, processing_temp_max_c, crystallinity,
+                    crystal_system, fracture_toughness, weibull_modulus,
+                    interlaminar_shear_strength, fiber_volume_fraction,
+                    source, notes)
                 VALUES %s
                 ON CONFLICT (mp_material_id) DO UPDATE SET
                     density               = EXCLUDED.density,

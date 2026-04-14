@@ -41,7 +41,7 @@ func main() {
 	} else {
 		log.Printf("✅ Material Catalog loaded successfully.")
 	}
-	
+
 	if db.Pool == nil && len(services.GetAllMaterials()) == 0 {
 		log.Printf("❌ CRITICAL WARNING: No database available (Postgres or CSV). Service will be degraded.")
 	}
@@ -77,8 +77,11 @@ func main() {
 	// API v1
 	v1 := r.Group("/api/v1")
 	{
-		// POST /api/v1/recommend — NL query → top 3 material recommendations
+		// POST /api/v1/recommend — NL query → top 3 material recommendations (legacy)
 		v1.POST("/recommend", handlers.Recommend)
+
+		// POST /api/v1/recommend/dispatcher — NL query → routed category → physics-verified recommendation (NEW)
+		v1.POST("/recommend/dispatcher", handlers.RecommendWithDispatcher)
 
 		// POST /api/v1/predict — custom alloy composition → LLM-enhanced prediction
 		v1.POST("/predict", handlers.Predict)
@@ -91,9 +94,10 @@ func main() {
 	}
 
 	log.Printf("🚀  Smart Alloy Selector backend starting on port %s", port)
-	log.Printf("    POST /api/v1/recommend  — Material recommendation")
-	log.Printf("    POST /api/v1/predict    — Custom alloy prediction")
-	log.Printf("    GET  /health            — Liveness check")
+	log.Printf("    POST /api/v1/recommend              — Material recommendation (legacy)")
+	log.Printf("    POST /api/v1/recommend/dispatcher   — Material recommendation (dispatcher + physics)")
+	log.Printf("    POST /api/v1/predict                — Custom alloy prediction")
+	log.Printf("    GET  /health                        — Liveness check")
 
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Server failed: %v", err)

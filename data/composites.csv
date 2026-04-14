@@ -1,4 +1,9 @@
 name,formula,category,subcategory,density,thermal_conductivity,yield_strength,tensile_strength,youngs_modulus,hardness_vickers,thermal_expansion,electrical_resistivity,notes,source,mp_material_id,interlaminar_shear_strength,fiber_volume_fraction
-CFRP Unidirectional,C/Epoxy,Composite,PMC,1.55,5.0,,1500.0,135.0,,0.5,1.7e-05,,Curated,,,
-GFRP Woven,SiO2/Epoxy,Composite,PMC,1.8,0.35,,900.0,40.0,,11.0,1000000000000.0,,Curated,,,
+CFRP Unidirectional,C/Epoxy,Composite,PMC,1.55,5.0,,1500.0,135.0,,0.5,1.7e-05,,Curated,,60.0,60.0
+GFRP Woven,SiO2/Epoxy,Composite,PMC,1.8,0.35,,900.0,40.0,,11.0,1000000000000.0,,Curated,,50.0,50.0
 Al-SiC Metal Matrix Composite,Al-SiC,Composite,MMC,2.9,170.0,310.0,400.0,115.0,130.0,12.4,4e-08,,Curated,,,
+Carbon Fiber (unconstrained),C,Composite,Fiber,1.6,160.0,,3500.0,230.0,,1.0,,,CSV,,,3.0
+CFRP Unidirectional (60%),C/Epoxy,Composite,PMC,1.55,5.0,,1500.0,135.0,,0.5,,,CSV,,60.0,60.0
+GFRP Woven (50%),SiO2/Epoxy,Composite,FRP,1.8,0.35,,900.0,40.0,,11.0,,,CSV,,50.0,50.0
+Carbon/PEEK (40%),C/PEEK,Composite,PMC,1.45,12.0,,850.0,120.0,,2.0,,,CSV,,55.0,40.0
+Glass/Epoxy Laminate,SiO2/Epoxy,Composite,Laminate,1.9,1.4,,600.0,38.0,,12.0,,,CSV,,45.0,50.0

@@ -2,17 +2,16 @@
 """
 fetch_materials.py
 ==================
-Fetches engineering materials from The Materials Project REST API (v2)
-using direct HTTP requests — no mp-api library dependency.
+Fetches engineering materials by scraping public internet sources
+(no Materials API dependency).
 
-Supplements the API data with a comprehensive curated table of
+Supplements scraped data with a comprehensive curated table of
 ~70 common engineering materials with full property data.
 
 Requirements:
     pip install requests pandas python-dotenv tqdm
 
 Usage:
-    export MP_API_KEY=ElqT9XOm6aFVqAKYBcAUfutWr3m5giXf
     python fetch_materials.py
 
 Output:
@@ -21,15 +20,19 @@ Output:
 
 import os
 import sys
-import json
-import time
 import logging
+import re
+from io import StringIO
 from pathlib import Path
 from typing import Optional
 
 import requests
 import pandas as pd
-from tqdm import tqdm
+
+try:
+    from jarvis.db.figshare import data as jarvis_figshare_data
+except Exception:
+    jarvis_figshare_data = None
 
 # ── Logging ───────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -49,95 +52,14 @@ if env_file.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-MP_API_KEY  = os.getenv("MP_API_KEY", "ElqT9XOm6aFVqAKYBcAUfutWr3m5giXf")
-MP_BASE_URL = "https://api.materialsproject.org"
+WIKI_ELEMENTS_URL = "https://en.wikipedia.org/wiki/List_of_chemical_elements"
+PERIODIC_TABLE_JSON_URL = "https://raw.githubusercontent.com/Bowserinator/Periodic-Table-JSON/master/PeriodicTableJSON.json"
+SCRAPE_MAX_ROWS = int(os.getenv("SCRAPE_MAX_ROWS", "6000"))
 
 DATA_DIR   = Path(__file__).parent
 RAW_JSON   = DATA_DIR / "materials_raw.json"
 OUTPUT_CSV = DATA_DIR / "materials_cleaned.csv"
-
-# ── API Client ────────────────────────────────────────────────────────────
-class MPRestClient:
-    """Lightweight REST client for the Materials Project v2 API."""
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({
-            "X-API-KEY": api_key,
-            "Accept": "application/json",
-            "User-Agent": "MetQuest-SmartAlloySelector/1.0",
-        })
-
-    def get(self, endpoint: str, params: dict = None) -> dict:
-        url = f"{MP_BASE_URL}{endpoint}"
-        for attempt in range(3):
-            try:
-                resp = self.session.get(url, params=params, timeout=30)
-                if resp.status_code == 429:
-                    wait = int(resp.headers.get("Retry-After", 10))
-                    log.warning(f"Rate limited — waiting {wait}s …")
-                    time.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                return resp.json()
-            except requests.HTTPError as e:
-                log.warning(f"HTTP {e.response.status_code} on attempt {attempt+1}: {e}")
-                if attempt == 2:
-                    raise
-                time.sleep(2 ** attempt)
-            except requests.RequestException as e:
-                log.warning(f"Request error (attempt {attempt+1}): {e}")
-                if attempt == 2:
-                    raise
-                time.sleep(2 ** attempt)
-        return {}
-
-    def fetch_summary(self, limit: int = 2000) -> list[dict]:
-        """
-        Fetch materials summary data: formula, density, elements.
-        The v2 API paginates with _limit and _skip.
-        """
-        results = []
-        page_size = 100
-        fields = "material_id,formula_pretty,elements,density,symmetry"
-
-        log.info(f"Fetching summary data (target: {limit} materials) …")
-
-        with tqdm(total=limit, desc="Fetching MP API") as pbar:
-            skip = 0
-            while len(results) < limit:
-                batch_size = min(page_size, limit - len(results))
-                data = self.get("/materials/summary/", params={
-                    "_fields": fields,
-                    "_limit": batch_size,
-                    "_skip": skip,
-                })
-
-                items = data.get("data", [])
-                if not items:
-                    log.info(f"No more data after {len(results)} items")
-                    break
-
-                for item in items:
-                    results.append({
-                        "mp_material_id"        : item.get("material_id", ""),
-                        "name"                  : item.get("formula_pretty", ""),
-                        "formula"               : item.get("formula_pretty", ""),
-                        "elements"              : item.get("elements", []),
-                        "density"               : item.get("density"),
-                        "source"                : "Materials Project",
-                    })
-
-                pbar.update(len(items))
-                skip += len(items)
-
-                # Rate-limit friendly
-                time.sleep(0.2)
-
-        log.info(f"Fetched {len(results)} records from MP API")
-        return results
-
+POLYMER_ENRICHMENT_CSV = DATA_DIR / "polymer_enrichment.csv"
 
 # ── Category Classifier ───────────────────────────────────────────────────
 ELEMENT_METALS = {
@@ -210,6 +132,294 @@ def safe_float(val) -> Optional[float]:
         return None if math.isnan(f) else f
     except (TypeError, ValueError):
         return None
+
+
+def parse_elements_from_formula(formula: str) -> list[str]:
+    if not formula:
+        return []
+    found = re.findall(r"[A-Z][a-z]?", str(formula))
+    if not found:
+        return []
+    # Keep order, unique symbols
+    return list(dict.fromkeys(found))
+
+
+def extract_first_number(val) -> Optional[float]:
+    """Extract first numeric token from noisy scraped text."""
+    if val is None:
+        return None
+    s = str(val).strip().replace(",", "")
+    if not s or s.lower() in {"nan", "none", "unknown", "n/a", "na", "-"}:
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", s)
+    if not m:
+        return None
+    return safe_float(m.group(0))
+
+
+def find_col(cols: list[str], hints: list[str]) -> str:
+    lowered = {c.lower(): c for c in cols}
+    for h in hints:
+        for lc, original in lowered.items():
+            if h in lc:
+                return original
+    return ""
+
+
+def scrape_wikipedia_elements() -> list[dict]:
+    """Scrape elemental material properties from Wikipedia table."""
+    try:
+        resp = requests.get(
+            WIKI_ELEMENTS_URL,
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text))
+    except Exception as e:
+        log.warning(f"Failed scraping {WIKI_ELEMENTS_URL}: {e}")
+        return []
+
+    selected = None
+    for t in tables:
+        cols = [str(c) for c in t.columns]
+        has_symbol = bool(find_col(cols, ["symbol", "sym.", "sym"]))
+        has_density = bool(find_col(cols, ["density"]))
+        has_melting = bool(find_col(cols, ["melting"]))
+        if has_symbol and (has_density or has_melting):
+            selected = t
+            break
+
+    if selected is None:
+        log.warning("Could not locate a usable elements table on Wikipedia")
+        return []
+
+    cols = [str(c) for c in selected.columns]
+    c_symbol = find_col(cols, ["symbol", "sym.", "sym"])
+    c_name = find_col(cols, ["name"])
+    c_density = find_col(cols, ["density"])
+    c_melting = find_col(cols, ["melting"])
+    c_boiling = find_col(cols, ["boiling"])
+
+    rows: list[dict] = []
+    for _, r in selected.iterrows():
+        symbol = str(r.get(c_symbol, "")).strip() if c_symbol else ""
+        if not symbol or len(symbol) > 3:
+            continue
+
+        name = str(r.get(c_name, symbol)).strip() if c_name else symbol
+        density = extract_first_number(r.get(c_density)) if c_density else None
+        melting = extract_first_number(r.get(c_melting)) if c_melting else None
+        boiling = extract_first_number(r.get(c_boiling)) if c_boiling else None
+
+        rows.append({
+            "name": name,
+            "formula": symbol,
+            "elements": [symbol],
+            "density": density,
+            "melting_point": melting,
+            "boiling_point": boiling,
+            "source": "Wikipedia (scraped)",
+            "notes": "Scraped from List of chemical elements",
+        })
+
+    log.info(f"Scraped {len(rows)} elemental rows from Wikipedia")
+    return rows
+
+
+def scrape_periodic_table_json() -> list[dict]:
+    """Scrape elemental properties from a public GitHub-hosted JSON dataset."""
+    try:
+        resp = requests.get(
+            PERIODIC_TABLE_JSON_URL,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:
+        log.warning(f"Failed scraping periodic dataset: {e}")
+        return []
+
+    elements = payload.get("elements") if isinstance(payload, dict) else None
+    if not isinstance(elements, list):
+        return []
+
+    rows: list[dict] = []
+    for el in elements:
+        symbol = str(el.get("symbol", "")).strip()
+        if not symbol:
+            continue
+        rows.append({
+            "name": str(el.get("name", symbol)).strip(),
+            "formula": symbol,
+            "elements": [symbol],
+            "density": safe_float(el.get("density")),
+            "melting_point": safe_float(el.get("melt")),
+            "boiling_point": safe_float(el.get("boil")),
+            "source": "Periodic-Table-JSON (scraped)",
+            "notes": "Scraped from public GitHub dataset",
+        })
+
+    log.info(f"Scraped {len(rows)} elemental rows from Periodic-Table-JSON")
+    return rows
+
+
+def scrape_jarvis_3d(max_rows: int = SCRAPE_MAX_ROWS) -> list[dict]:
+    """Scrape a large public materials dataset from JARVIS Figshare."""
+    if jarvis_figshare_data is None:
+        log.warning("jarvis-tools not installed; skipping JARVIS scrape source")
+        return []
+
+    try:
+        raw = jarvis_figshare_data("dft_3d")
+    except Exception as e:
+        log.warning(f"Failed scraping JARVIS dataset: {e}")
+        return []
+
+    rows: list[dict] = []
+    for r in raw:
+        formula = str(r.get("formula", "")).strip()
+        if not formula:
+            continue
+
+        density = safe_float(r.get("density"))
+        if density is None:
+            # Keep only entries with at least one key property to avoid dropping later.
+            continue
+
+        k = safe_float(r.get("bulk_modulus_kv"))
+        g = safe_float(r.get("shear_modulus_gv"))
+        youngs = None
+        if k is not None and g is not None and (3 * k + g) != 0:
+            # Isotropic estimate: E = 9KG/(3K+G)
+            youngs = (9.0 * k * g) / (3.0 * k + g)
+
+        rows.append({
+            "name": formula,
+            "formula": formula,
+            "elements": parse_elements_from_formula(formula),
+            "density": density,
+            "melting_point": None,
+            "boiling_point": None,
+            "youngs_modulus": youngs,
+            "source": "JARVIS dft_3d (scraped)",
+            "notes": str(r.get("jid", "")),
+        })
+
+        if len(rows) >= max_rows:
+            break
+
+    log.info(f"Scraped {len(rows)} rows from JARVIS dft_3d")
+    return rows
+
+
+def fetch_from_web() -> list[dict]:
+    """Fetch internet-scraped rows only (no API calls)."""
+    rows = []
+    rows.extend(scrape_jarvis_3d())
+    rows.extend(scrape_periodic_table_json())
+    if not rows:
+        rows.extend(scrape_wikipedia_elements())
+    return rows
+
+
+def normalize_key(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    return s
+
+
+def load_polymer_enrichment() -> pd.DataFrame:
+    """Load optional polymer Tg/HDT enrichment table."""
+    if not POLYMER_ENRICHMENT_CSV.exists():
+        log.warning(f"Polymer enrichment file not found: {POLYMER_ENRICHMENT_CSV}")
+        return pd.DataFrame()
+
+    df = pd.read_csv(POLYMER_ENRICHMENT_CSV)
+    required = {"name", "formula", "glass_transition_temp", "heat_deflection_temp"}
+    missing = required - set(df.columns)
+    if missing:
+        log.warning(f"Polymer enrichment missing required columns: {sorted(missing)}")
+        return pd.DataFrame()
+
+    for col in ["glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", "processing_temp_max_c", "crystallinity"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["name_key"] = df["name"].apply(normalize_key)
+    df["formula_key"] = df["formula"].apply(normalize_key)
+    log.info(f"Loaded polymer enrichment rows: {len(df)}")
+    return df
+
+
+def _canonicalize_enrichment_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
+    """Normalize enrichment schema from CSV/API into canonical columns."""
+    if df.empty:
+        return df
+
+    alias = {
+        "name": ["name", "material", "material_name", "polymer_name"],
+        "formula": ["formula", "chemical_formula", "grade", "type"],
+        "glass_transition_temp": [
+            "glass_transition_temp", "tg", "tg_k", "tg_kelvin", "glass_transition_temperature",
+        ],
+        "heat_deflection_temp": [
+            "heat_deflection_temp", "hdt", "hdt_k", "hdt_kelvin", "heat_deflection_temperature",
+        ],
+        "processing_temp_min_c": ["processing_temp_min_c", "processing_min_c", "print_temp_min_c"],
+        "processing_temp_max_c": ["processing_temp_max_c", "processing_max_c", "print_temp_max_c"],
+        "crystallinity": ["crystallinity", "crystallinity_percent", "x_c"],
+    }
+
+    renames = {}
+    lower_to_col = {str(c).strip().lower(): c for c in df.columns}
+    for canonical, choices in alias.items():
+        for c in choices:
+            if c.lower() in lower_to_col:
+                renames[lower_to_col[c.lower()]] = canonical
+                break
+    df = df.rename(columns=renames)
+
+    for required in ["name", "formula", "glass_transition_temp", "heat_deflection_temp"]:
+        if required not in df.columns:
+            df[required] = None
+
+    for col in [
+        "glass_transition_temp",
+        "heat_deflection_temp",
+        "processing_temp_min_c",
+        "processing_temp_max_c",
+        "crystallinity",
+    ]:
+        if col not in df.columns:
+            df[col] = None
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["name"] = df["name"].fillna("").astype(str)
+    df["formula"] = df["formula"].fillna("").astype(str)
+    df["name_key"] = df["name"].apply(normalize_key)
+    df["formula_key"] = df["formula"].apply(normalize_key)
+    df["source"] = source_name
+
+    keep = [
+        "name",
+        "formula",
+        "glass_transition_temp",
+        "heat_deflection_temp",
+        "processing_temp_min_c",
+        "processing_temp_max_c",
+        "crystallinity",
+        "name_key",
+        "formula_key",
+        "source",
+    ]
+    return df[keep]
 
 
 # ── Curated Dataset ───────────────────────────────────────────────────────
@@ -622,61 +832,45 @@ def load_curated_supplement() -> pd.DataFrame:
     df["source"] = "Curated"
     df["mp_material_id"] = None
     df["notes"] = None
+    if "glass_transition_temp" not in df.columns:
+        df["glass_transition_temp"] = None
+    if "heat_deflection_temp" not in df.columns:
+        df["heat_deflection_temp"] = None
     df["boiling_point"] = df.get("boiling_point")
     return df
 
 
-# ── Main ──────────────────────────────────────────────────────────────────
-def fetch_from_api() -> list[dict]:
-    """Fetch from Materials Project REST API v2."""
-    client = MPRestClient(MP_API_KEY)
-
-    # Test connection first
-    log.info("Testing API connection …")
-    try:
-        test = client.get("/materials/summary/", params={
-            "_fields": "material_id,formula_pretty,density",
-            "_limit": 1,
-        })
-        if "data" in test:
-            log.info("✅  API connection successful")
-        else:
-            log.warning(f"Unexpected API response: {list(test.keys())}")
-    except Exception as e:
-        log.error(f"API test failed: {e}")
-        return []  # Fall back to curated only
-
-    return client.fetch_summary(limit=15000)
-
-
 def build_api_rows(raw_rows: list[dict]) -> pd.DataFrame:
-    """Convert raw API rows to clean DataFrame."""
+    """Convert raw scraped rows to clean DataFrame."""
     rows = []
     for r in raw_rows:
         elements = r.get("elements", [])
         formula  = r.get("formula", "") or ""
+        name = r.get("name", formula) or formula
         category, subcategory = classify_category(formula, elements)
 
         rows.append({
             "mp_material_id"        : r.get("mp_material_id"),
-            "name"                  : formula,
+            "name"                  : name,
             "formula"               : formula,
             "category"              : category,
             "subcategory"           : subcategory,
             "density"               : safe_float(r.get("density")),
-            "melting_point"         : None,
-            "boiling_point"         : None,
+            "glass_transition_temp" : None,
+            "heat_deflection_temp"  : None,
+            "melting_point"         : safe_float(r.get("melting_point")),
+            "boiling_point"         : safe_float(r.get("boiling_point")),
             "thermal_conductivity"  : None,
             "specific_heat"         : None,
             "thermal_expansion"     : None,
             "electrical_resistivity": None,
             "yield_strength"        : None,
             "tensile_strength"      : None,
-            "youngs_modulus"        : None,
+            "youngs_modulus"        : safe_float(r.get("youngs_modulus")),
             "hardness_vickers"      : None,
             "poissons_ratio"        : None,
-            "source"                : "Materials Project",
-            "notes"                 : None,
+            "source"                : r.get("source", "Web Scraped"),
+            "notes"                 : r.get("notes"),
         })
     return pd.DataFrame(rows)
 
@@ -693,7 +887,7 @@ def merge_datasets(api_df: pd.DataFrame, curated_df: pd.DataFrame) -> pd.DataFra
     combined.drop_duplicates(subset=["formula"], keep="first", inplace=True)
 
     # Drop rows with NO useful properties
-    prop_cols = ["density","melting_point","thermal_conductivity","electrical_resistivity"]
+    prop_cols = ["density","glass_transition_temp","heat_deflection_temp","melting_point","thermal_conductivity","electrical_resistivity"]
     mask = combined[prop_cols].notna().any(axis=1)
     combined = combined[mask].copy()
 
@@ -702,21 +896,66 @@ def merge_datasets(api_df: pd.DataFrame, curated_df: pd.DataFrame) -> pd.DataFra
     return combined
 
 
+def apply_polymer_enrichment(df: pd.DataFrame, enrich_df: pd.DataFrame) -> pd.DataFrame:
+    """Apply Tg/HDT enrichment to polymer rows by normalized name/formula keys."""
+    if enrich_df.empty:
+        return df
+
+    for col in [
+        "glass_transition_temp",
+        "heat_deflection_temp",
+        "processing_temp_min_c",
+        "processing_temp_max_c",
+        "crystallinity",
+    ]:
+        if col not in df.columns:
+            df[col] = None
+
+    df["name_key"] = df["name"].apply(normalize_key)
+    df["formula_key"] = df["formula"].apply(normalize_key)
+
+    e_by_name = enrich_df.set_index("name_key").to_dict("index")
+    e_by_formula = enrich_df.set_index("formula_key").to_dict("index")
+
+    updates = 0
+    for i, row in df.iterrows():
+        if str(row.get("category", "")).lower() != "polymer":
+            continue
+
+        key_name = row.get("name_key", "")
+        key_formula = row.get("formula_key", "")
+        src = None
+        if key_name and key_name in e_by_name:
+            src = e_by_name[key_name]
+        elif key_formula and key_formula in e_by_formula:
+            src = e_by_formula[key_formula]
+
+        if not src:
+            continue
+
+        for col in ["glass_transition_temp", "heat_deflection_temp", "processing_temp_min_c", "processing_temp_max_c", "crystallinity"]:
+            if col in src and pd.notna(src[col]):
+                df.at[i, col] = src[col]
+        updates += 1
+
+    df.drop(columns=["name_key", "formula_key"], inplace=True, errors="ignore")
+    log.info(f"Applied polymer enrichment to {updates} rows")
+    return df
+
+
 def main():
     log.info("=" * 60)
     log.info("Smart Alloy Selector — Materials Data Fetcher v2")
     log.info("=" * 60)
 
-    # 1. Fetch from API
-    api_rows = []
-    if MP_API_KEY:
-        log.info(f"MP API key: {MP_API_KEY[:8]}…")
-        try:
-            api_rows = fetch_from_api()
-        except Exception as e:
-            log.warning(f"API fetch error: {e} — using curated only")
+    # 1. Fetch from internet scraping only (no API)
+    scraped_rows = []
+    try:
+        scraped_rows = fetch_from_web()
+    except Exception as e:
+        log.warning(f"Web scraping fetch error: {e} — using curated only")
 
-    api_df = build_api_rows(api_rows) if api_rows else pd.DataFrame()
+    scraped_df = build_api_rows(scraped_rows) if scraped_rows else pd.DataFrame()
 
     # 2. Load curated supplement
     log.info("Loading curated dataset …")
@@ -724,7 +963,11 @@ def main():
     log.info(f"Curated: {len(curated_df)} materials")
 
     # 3. Merge
-    final_df = merge_datasets(api_df, curated_df)
+    final_df = merge_datasets(scraped_df, curated_df)
+
+    # 3b. Enrich polymers with Tg/HDT and processing fields if enrichment file exists
+    enrich_df = _canonicalize_enrichment_df(load_polymer_enrichment(), "CSV")
+    final_df = apply_polymer_enrichment(final_df, enrich_df)
 
     # 4. Save
     final_df.to_csv(OUTPUT_CSV, index=False)

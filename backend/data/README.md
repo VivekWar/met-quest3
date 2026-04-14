@@ -41,7 +41,7 @@ pip install -r requirements.txt
 
 ---
 
-## Step 3 — Configure API Keys
+## Step 3 — Configure Environment
 
 Copy `.env.example` to `.env` in the project root and fill it in:
 
@@ -53,9 +53,10 @@ nano .env   # or use your editor
 
 Required variables for this milestone:
 ```env
-MP_API_KEY=ElqT9XOm6aFVqAKYBcAUfutWr3m5giXf
 DATABASE_URL=postgres://user:pass@ep-xxx.neon.tech/neondb?sslmode=require
 ```
+
+No materials API key is needed. The script scrapes public internet datasets and merges with curated data.
 
 ---
 
@@ -67,19 +68,25 @@ python fetch_materials.py
 ```
 
 **What it does:**
-- Connects to the Materials Project API with your key
-- Downloads ~2,000 materials with density, formula, element data
+- Scrapes public internet datasets:
+   - JARVIS dft_3d (Figshare) for large-scale materials rows
+   - Periodic-Table-JSON and Wikipedia element fallback
 - Supplements with a curated table of 60+ common engineering materials
   (with full thermal, electrical, and mechanical properties)
 - Outputs `materials_cleaned.csv`
 
 **Expected output:**
 ```
-[INFO] Using Materials Project API key: ElqT9X…
-[INFO] Retrieving summary documents …
-[INFO] Retrieved 2000 summary documents
-[INFO] Final dataset: 2060 materials
+[INFO] Scraped 6000 rows from JARVIS dft_3d
+[INFO] Scraped 119 elemental rows from Periodic-Table-JSON
+[INFO] Curated: 70+ materials
+[INFO] Merged dataset: ... materials
 ✅  Cleaned CSV saved to: data/materials_cleaned.csv
+```
+
+Optional row limit for scraping:
+```env
+SCRAPE_MAX_ROWS=6000
 ```
 
 ---
