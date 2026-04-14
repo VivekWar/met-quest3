@@ -991,6 +991,19 @@ func ensureMinimumRecommendedIDs(query string, ids []int, allMaterials []models.
 		}
 	}
 
+	if len(clean) < minCount {
+		for _, m := range allMaterials {
+			if m.ID <= 0 || lookup[m.ID] {
+				continue
+			}
+			lookup[m.ID] = true
+			clean = append(clean, m.ID)
+			if len(clean) >= minCount {
+				break
+			}
+		}
+	}
+
 	if len(clean) > 1 {
 		clean = rerankRecommendedIDs(query, clean, allMaterials)
 	}
