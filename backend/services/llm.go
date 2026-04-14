@@ -672,6 +672,9 @@ CATALOG (All Available Materials - pick ONLY from here):
 	if len(parsed.RecommendedIDs) == 0 {
 		parsed.RecommendedIDs = inferFallbackRecommendedIDs(originalQuery, allMaterials, 3)
 	}
+	if len(parsed.RecommendedIDs) > 1 {
+		parsed.RecommendedIDs = rerankRecommendedIDs(originalQuery, parsed.RecommendedIDs, allMaterials)
+	}
 
 	if strings.TrimSpace(parsed.ReportMarkdown) == "" && strings.TrimSpace(parsed.LegacyReport) == "" {
 		parsed.Report = buildFallbackReport(originalQuery, parsed.RecommendedIDs, allMaterials)
@@ -775,70 +778,7 @@ func inferFallbackRecommendedIDs(query string, allMaterials []models.Material, l
 			continue
 		}
 
-		score := 0.0
-
-		if m.Density != nil {
-			score += (2.0 - *m.Density) * 6.0 // favor lightweight materials
-		}
-
-		if m.YieldStrength != nil {
-			score += *m.YieldStrength * 0.08
-		}
-
-		if requiresHeatResistance {
-			if m.GlassTransitionTemp != nil {
-				score += (*m.GlassTransitionTemp - 273.15) * 0.9 // prioritize Tg margin in C
-			}
-			if m.HeatDeflectionTemp != nil {
-				score += (*m.HeatDeflectionTemp - 273.15) * 0.8
-			}
-			if m.GlassTransitionTemp != nil && (*m.GlassTransitionTemp-273.15) < 70 {
-				score -= 120.0
-			}
-		}
-
-		if isDesktopPrint {
-			if m.ProcessingTempMaxC != nil {
-				if *m.ProcessingTempMaxC <= 270.0 {
-					score += 40.0
-				} else if *m.ProcessingTempMaxC <= 300.0 {
-					score -= 10.0
-				} else {
-					score -= 80.0
-				}
-			}
-			if m.ThermalExpansion != nil {
-				score -= *m.ThermalExpansion * 0.2 // lower expansion => lower warp risk
-				if *m.ThermalExpansion > 80.0 {
-					score -= 40.0
-				}
-				if *m.ThermalExpansion > 95.0 {
-					score -= 120.0
-				}
-			}
-			name := strings.ToLower(m.Name)
-			if strings.Contains(name, "pla") && requiresHeatResistance {
-				score -= 120.0
-			}
-			if strings.Contains(name, "peek") || strings.Contains(name, "ultem") {
-				score -= 140.0
-			}
-			if strings.Contains(name, "abs") {
-				score -= 180.0
-			}
-			if strings.Contains(name, "polystyrene") || strings.Contains(name, " ps") {
-				score -= 90.0
-			}
-			if strings.Contains(name, "petg") {
-				score += 220.0
-			}
-			if strings.Contains(name, "pc-pbt") {
-				score += 120.0
-			}
-			if strings.Contains(name, "polycarbonate") || strings.Contains(name, " pc") {
-				score += 20.0
-			}
-		}
+		score := scoreMaterialForQuery(m, isDesktopPrint, requiresHeatResistance)
 
 		inserted := false
 		for i := range best {
@@ -861,6 +801,116 @@ func inferFallbackRecommendedIDs(query string, allMaterials []models.Material, l
 		ids = append(ids, b.id)
 	}
 	return ids
+}
+
+func rerankRecommendedIDs(query string, ids []int, allMaterials []models.Material) []int {
+	q := strings.ToLower(query)
+	isDesktopPrint := strings.Contains(q, "3d print") || strings.Contains(q, "fdm") || strings.Contains(q, "desktop printer")
+	requiresHeatResistance := strings.Contains(q, "heat") || strings.Contains(q, "warp") || strings.Contains(q, "melt") || strings.Contains(q, "motor")
+
+	lookup := map[int]models.Material{}
+	for _, m := range allMaterials {
+		lookup[m.ID] = m
+	}
+
+	type scored struct {
+		id    int
+		score float64
+	}
+	ranked := make([]scored, 0, len(ids))
+	for _, id := range ids {
+		m, ok := lookup[id]
+		if !ok {
+			continue
+		}
+		ranked = append(ranked, scored{id: id, score: scoreMaterialForQuery(m, isDesktopPrint, requiresHeatResistance)})
+	}
+
+	for i := 0; i < len(ranked)-1; i++ {
+		for j := i + 1; j < len(ranked); j++ {
+			if ranked[j].score > ranked[i].score {
+				ranked[i], ranked[j] = ranked[j], ranked[i]
+			}
+		}
+	}
+
+	out := make([]int, 0, len(ranked))
+	for _, r := range ranked {
+		out = append(out, r.id)
+	}
+	if len(out) == 0 {
+		return ids
+	}
+	return out
+}
+
+func scoreMaterialForQuery(m models.Material, isDesktopPrint bool, requiresHeatResistance bool) float64 {
+	score := 0.0
+
+	if m.Density != nil {
+		score += (2.0 - *m.Density) * 6.0 // favor lightweight materials
+	}
+
+	if m.YieldStrength != nil {
+		score += *m.YieldStrength * 0.08
+	}
+
+	if requiresHeatResistance {
+		if m.GlassTransitionTemp != nil {
+			score += (*m.GlassTransitionTemp - 273.15) * 0.9 // prioritize Tg margin in C
+		}
+		if m.HeatDeflectionTemp != nil {
+			score += (*m.HeatDeflectionTemp - 273.15) * 0.8
+		}
+		if m.GlassTransitionTemp != nil && (*m.GlassTransitionTemp-273.15) < 70 {
+			score -= 120.0
+		}
+	}
+
+	if isDesktopPrint {
+		if m.ProcessingTempMaxC != nil {
+			if *m.ProcessingTempMaxC <= 270.0 {
+				score += 40.0
+			} else if *m.ProcessingTempMaxC <= 300.0 {
+				score -= 10.0
+			} else {
+				score -= 80.0
+			}
+		}
+		if m.ThermalExpansion != nil {
+			score -= *m.ThermalExpansion * 0.2 // lower expansion => lower warp risk
+			if *m.ThermalExpansion > 80.0 {
+				score -= 40.0
+			}
+			if *m.ThermalExpansion > 95.0 {
+				score -= 120.0
+			}
+		}
+		name := strings.ToLower(m.Name)
+		if strings.Contains(name, "pla") && requiresHeatResistance {
+			score -= 120.0
+		}
+		if strings.Contains(name, "peek") || strings.Contains(name, "ultem") {
+			score -= 140.0
+		}
+		if strings.Contains(name, "abs") {
+			score -= 180.0
+		}
+		if strings.Contains(name, "polystyrene") || strings.Contains(name, " ps") {
+			score -= 90.0
+		}
+		if strings.Contains(name, "petg") {
+			score += 220.0
+		}
+		if strings.Contains(name, "pc-pbt") {
+			score += 120.0
+		}
+		if strings.Contains(name, "polycarbonate") || strings.Contains(name, " pc") {
+			score += 20.0
+		}
+	}
+
+	return score
 }
 
 func buildFallbackReport(query string, ids []int, allMaterials []models.Material) string {
