@@ -7,181 +7,269 @@ sdk: docker
 pinned: false
 ---
 
-# 🧬 Smart Alloy Selector - Tech Titans (MET-QUEST '26)
+# Smart Alloy Selector - Tech Titans
 
-## 🚀 Live Production Links
+AI-powered material recommendation and alloy prediction platform built for **MET-QUEST '26**.
 
-*   **Production Frontend**: [met-quest.web.app](https://met-quest.web.app) (Hosted on Firebase)
-*   **Production API**: [vivekwa-met-quest-api.hf.space](https://vivekwa-met-quest-api.hf.space) (Hosted on Hugging Face Spaces)
+The project combines a Go/Gin backend, a React/Vite frontend, modular materials CSV catalogs, optional PostgreSQL storage, and Gemini-powered analysis to act like a virtual materials scientist for engineering design queries.
 
----
+## Live Links
 
-# Smart Alloy Selector & Material Recommendation: Tech Titans 🚀
-**Needle in the Data-Stack: The AI-Powered Virtual Materials Scientist**
+- **Frontend:** [met-quest.web.app](https://met-quest.web.app)
+- **API:** [vivekwa-met-quest-api.hf.space](https://vivekwa-met-quest-api.hf.space)
+- **Health check:** [vivekwa-met-quest-api.hf.space/health](https://vivekwa-met-quest-api.hf.space/health)
 
-Built for the **MET-QUEST ’26** engineering competition, this platform is the official submission from **Team Tech Titans**. It features a high-performance **Material Recommendation** engine and a custom **Alloy Predictor** that replaces the grueling manual process of scraping disjointed tables (MatWeb, NASA TPSX) with a unified, **Long-Context RAG** engine.
+## What It Does
 
----
+- Recommends materials from natural-language engineering requirements.
+- Routes advanced queries through a category-aware dispatcher for polymers, alloys, pure metals, ceramics, and composites.
+- Runs physics-focused verification before returning the final recommendation.
+- Predicts custom alloy properties from element composition using rule-of-mixtures plus LLM refinement.
+- Loads the materials catalog from local CSV files by default, with optional Neon/PostgreSQL support.
+- Falls back gracefully when Postgres or an LLM provider is unavailable.
 
-## 🏗️ System Architecture
+## Current Architecture
 
 ```mermaid
 graph TD
-    User([User Query]) --> React[React Frontend / Vite]
-    React --> Go[Go Backend / Gin]
-    Go --> Filter[Domain Segregation Engine]
-    Filter --> CSV[(In-Memory CSV DB)]
-    Filter --> Postgres[(Neon PostgreSQL)]
-    Go --> LLM[OpenRouter / Gemini 1.5]
-    LLM --> Report[Analytical Technical Report]
-    Report --> User
+    User([User]) --> Frontend[React + Vite Frontend]
+    Frontend --> API[Go + Gin API]
+    API --> CSV[(Modular In-Memory CSV Catalog)]
+    API --> PG[(Optional PostgreSQL / Neon)]
+    API --> Legacy[Long-Context Recommender]
+    API --> Dispatcher[Category Dispatcher]
+    Dispatcher --> Search[Specialized Physics Search]
+    Search --> Analysis[Scientific Verification]
+    API --> Predictor[Alloy Predictor]
+    API --> LLM[Google Gemini / OpenRouter Fallback]
+    Analysis --> Response[Recommendation Report]
+    Predictor --> Response
+    Legacy --> Response
 ```
 
----
+## API Surface
 
-## 📂 File-by-File Technical Analysis
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | API liveness check. |
+| `POST` | `/api/v1/recommend` | Legacy long-context material recommendation endpoint used by the current frontend. |
+| `POST` | `/api/v1/recommend/dispatcher` | New category-aware dispatcher with specialized search and physics verification. |
+| `POST` | `/api/v1/predict` | Custom alloy composition prediction. |
 
-### 🌐 Project Root
-| File | Responsibility |
-|------|----------------|
-| `firebase.json` | Configuration for Firebase Hosting (Frontend targets `frontend/dist`). |
-| `.env.example` | Template for environment variables (API Keys, DB URL). |
-| `PROJECT_CHARTER.md` | Strategic overview of the project goals and architectural constraints. |
-| `DEPLOYMENT.md` | Manual troubleshooting guide for Cloud Run and Firebase. |
+### Recommendation Request
 
-### 🧠 Backend (`/backend`)
-The core processing engine built in Golang.
-| File | Logic |
-|------|-------|
-| `main.go` | Server entry point. Orchestrates the Gin router, CORS, and endpoint lifecycle. |
-| `handlers/recommend.go` | Entry point for natural language **Material Recommendation** queries. |
-| `handlers/predict.go` | Orchestrates the two-phase custom **Alloy Predictor**. |
-| `services/llm.go` | **The AI Core.** Implements Intent Extraction and **Long-Context Analyze**. |
-| `services/csv_db.go` | High-speed engine that parses 8k+ materials into RAM at startup. |
-| `services/predictor.go` | Implements Rule-of-Mixtures (Phase 1) and LLM Refinement (Phase 2). |
-| `db/postgres.go` | Manages the Neon PostgreSQL connection pool with automated mock fallback. |
-| `models/material.go` | Central Go structs for Materials, Search Intents, and AI Reports. |
-| `Dockerfile` | Multi-stage production build (Go / Alpine) with bundled data assets. |
+```json
+{
+  "query": "Need a lightweight alloy for aircraft wing components with fatigue resistance",
+  "domain": "Aerospace & Aviation"
+}
+```
 
-### 🎨 Frontend (`/frontend`)
-A modern React application built for speed and visual excellence.
-| File | UI / UX Role |
-|------|--------------|
-| `src/App.tsx` | Main application shell. Manages state for the AI search results. |
-| `src/components/QueryInput.tsx` | Specialized search interface for **Material Recommendation**. |
-| `src/components/PredictorPanel.tsx` | Dynamic **Alloy Predictor** with real-time property charts. |
-| `src/components/ReportCard.tsx` | Renders the AI's "Virtual Scientist" report with Markdown support. |
-| `src/api/client.ts` | Type-safe Axios bridge for production and local backend calls. |
-| `src/styles/index.css` | Custom CSS design system (Glassmorphism, Vibrant Dark Mode). |
+### Alloy Prediction Request
 
-### 📊 Data Pipeline (`/data`)
-The lifecycle of the 8,759-entry materials database.
-| File | Data Life Cycle |
-|------|-----------------|
-| `fetch_materials.py` | Python script to ingest 15,000+ raw records from Materials Project. |
-| `seed_db.py` | Optimized bulk uploader for Neon/Postgres using `execute_values`. |
-| `schema.sql` | DDL for the structured `materials` and `elements` tables. |
-| `materials_cleaned.csv` | **Source of Truth.** The cleaned dataset used by the In-Memory engine. |
+```json
+{
+  "composition": {
+    "Al": 90,
+    "Zn": 6,
+    "Mg": 2,
+    "Cu": 2
+  }
+}
+```
 
----
+## Backend Highlights
 
-## ✨ Key Innovations (Brownie Points)
+The backend lives in [`backend/`](backend/) and is written in Go.
 
-### 1. Long-Context RAG (LCR)
-Traditional vector search loses the "holistic" engineering comparison. This project uses **LCR**, injecting up to 1,000 relevant materials directly into the LLM's context window. This allows the AI to "read" the entire catalog simultaneously, just like a human scientist.
+- [`backend/main.go`](backend/main.go): starts the Gin server, loads environment variables, connects to Postgres when available, loads the CSV catalog, configures CORS, and registers routes.
+- [`backend/handlers/recommend.go`](backend/handlers/recommend.go): contains both the legacy recommendation handler and the new dispatcher handler.
+- [`backend/handlers/predict.go`](backend/handlers/predict.go): validates alloy composition requests and calls the predictor service.
+- [`backend/services/llm.go`](backend/services/llm.go): provider-aware Gemini/OpenRouter calls, intent extraction, long-context analysis, dispatcher routing, specialized search, and scientific analysis.
+- [`backend/services/csv_db.go`](backend/services/csv_db.go): loads modular CSV catalogs into memory for fast local and production fallback searches.
+- [`backend/services/predictor.go`](backend/services/predictor.go): computes rule-of-mixtures baselines and asks the LLM for thermodynamic refinement.
+- [`backend/db/postgres.go`](backend/db/postgres.go): optional PostgreSQL connection pool with mock-mode fallback.
 
-### 2. Domain Segregation Engine
-To maintain high precision without hitting token limits, we implemented **Domain Segregation**. The backend applies physics-based filters (e.g., *Aerospace*, *Biomedical*, *Plastics*) to mathematically narrow the search space before sending it to the AI.
+### LLM Provider Behavior
 
-### 3. Two-Phase Alloy Predictor
-For alloys not in the database:
-- **Phase 1**: Programmatic **Rule-of-Mixtures** calculation from elemental data.
-- **Phase 2**: **Thermodynamic Refinement** via Gemini to account for crystalline phase stability and fatigue resistance.
+The backend prefers a valid `GEMINI_API_KEY` and can also use `OPENROUTER_API_KEY`.
 
----
+Provider flow:
 
-## 🚀 Setup & Execution
+1. Google AI Studio Gemini models are tried first.
+2. Temporary quota and availability failures are tracked with model-level backoff.
+3. OpenRouter is used as a fallback when a valid OpenRouter key is present.
+4. If no valid key exists, the service returns mock AI responses where supported so local development still works.
 
-### 1. Environment Variables
-The system is **AI-Native**. You only need ONE of the following keys:
+## Dispatcher Pipeline
 
-- **Option A (Direct Google AI Studio)**: Set `GEMINI_API_KEY` (highly recommended!).
-- **Option B (Proxy via OpenRouter)**: If you use OpenRouter, you can set `GEMINI_API_KEY` to your OpenRouter key, or keep the legacy `OPENROUTER_API_KEY`.
+The dispatcher endpoint adds the newest recommendation flow:
 
-#### 🔑 Where to get your key:
-- **Google AI Studio**: Go to **[aistudio.google.com](https://aistudio.google.com/)** and click "Get API Key". It's free and fast!
-- **OpenRouter**: Go to **[openrouter.ai](https://openrouter.ai/)**.
+1. `RouteQuery()` classifies the query into `Polymers`, `Alloys`, `Pure_Metals`, `Ceramics`, or `Composites`.
+2. The backend loads candidates from Postgres when available, otherwise from the in-memory CSV catalog.
+3. `ExtractIntent()` converts natural language constraints into filter ranges.
+4. Category-specific search ranks candidates using relevant engineering properties.
+5. `ScientificAnalysis()` performs physics-driven checks, merit-index reasoning, failure rejection notes, manufacturing feasibility, and safety-margin analysis.
 
-#### 🔑 How to get an OpenRouter API Key:
-1. Go to **[openrouter.ai](https://openrouter.ai/)**.
-2. Sign up or log in.
-3. Go to **[Settings → Keys](https://openrouter.ai/settings/keys)**.
-4. Click **"Create Key"** and give it a name (e.g., *Met-Quest*).
-5. Copy the key and paste it into your `.env` file!
+More detail is available in:
 
-### 2. Configure Environment
-Create a `.env` file in the root directory:
+- [`DISPATCHER_IMPLEMENTATION.md`](DISPATCHER_IMPLEMENTATION.md)
+- [`DISPATCHER_QUICK_REFERENCE.md`](DISPATCHER_QUICK_REFERENCE.md)
+- [`DISPATCHER_SUMMARY.md`](DISPATCHER_SUMMARY.md)
+- [`IMPLEMENTATION_VERIFICATION.md`](IMPLEMENTATION_VERIFICATION.md)
+
+## Frontend
+
+The frontend lives in [`frontend/`](frontend/) and uses React, TypeScript, Vite, and Axios.
+
+- [`frontend/src/App.tsx`](frontend/src/App.tsx): main two-tab application shell for material recommendation and alloy prediction.
+- [`frontend/src/components/QueryInput.tsx`](frontend/src/components/QueryInput.tsx): natural-language material query form.
+- [`frontend/src/components/PredictorPanel.tsx`](frontend/src/components/PredictorPanel.tsx): custom alloy composition workflow.
+- [`frontend/src/components/ReportCard.tsx`](frontend/src/components/ReportCard.tsx): renders the virtual scientist report.
+- [`frontend/src/components/PropertyTable.tsx`](frontend/src/components/PropertyTable.tsx): compares returned material properties.
+- [`frontend/src/api/client.ts`](frontend/src/api/client.ts): API client. Defaults to the Hugging Face backend and supports `VITE_API_URL` overrides.
+
+## Data Pipeline
+
+The data layer is CSV-first, with optional database sync.
+
+| Path | Purpose |
+| --- | --- |
+| [`data/materials_cleaned.csv`](data/materials_cleaned.csv) | Full cleaned catalog fallback. |
+| [`data/polymers.csv`](data/polymers.csv) | Polymer catalog. |
+| [`data/metals.csv`](data/metals.csv) | Metal and alloy catalog. |
+| [`data/ceramics.csv`](data/ceramics.csv) | Ceramic catalog. |
+| [`data/composites.csv`](data/composites.csv) | Composite catalog. |
+| [`data/schema.sql`](data/schema.sql) | PostgreSQL schema. |
+| [`data/seed_db.py`](data/seed_db.py) | Bulk CSV to Postgres loader. |
+| [`data/fetch_materials.py`](data/fetch_materials.py) | Materials Project ingestion helper. |
+
+The backend also contains deployment-ready copies under [`backend/data/`](backend/data/) for Docker/Hugging Face packaging.
+
+## Local Setup
+
+### Prerequisites
+
+- Go 1.24 or compatible with the module in [`backend/go.mod`](backend/go.mod)
+- Node.js and npm
+- Optional: Python 3 for data ingestion scripts
+- Optional: Firebase CLI for frontend deployment
+
+### Environment Variables
+
+Create `.env` in the project root when running locally:
+
 ```env
-OPENROUTER_API_KEY=your_key_here
+GEMINI_API_KEY=your_google_ai_studio_key
+OPENROUTER_API_KEY=your_openrouter_key
+DATABASE_URL=postgres_connection_string_optional
+ALLOWED_ORIGINS=http://localhost:5173,https://met-quest.web.app
+PORT=8080
 ```
 
-### 3. Run Backend
-The backend automatically loads **8,759 materials** from the local CSV into RAM for sub-millisecond searching. No database setup is required!
+Only one valid LLM key is required. `GEMINI_API_KEY` is preferred. `DATABASE_URL` is optional because the backend can run from CSV alone.
+
+### Run Backend
+
 ```bash
 cd backend
 go run main.go
 ```
 
-### 4. Run Frontend
+The API starts on `http://localhost:8080` unless `PORT` is set.
+
+### Run Frontend
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
----
+For local frontend-to-local-backend calls, set:
 
-## 🛠️ Advanced (Optional)
-If you wish to re-ingest data or scale to a cloud-based PostgreSQL:
+```env
+VITE_API_URL=http://localhost:8080/api/v1
+```
 
-### Syncing to Cloud Database (Neon)
-1. Add `DATABASE_URL` to your `.env`.
-2. Sync the materials:
-   ```bash
-   cd data
-   python3 seed_db.py
-   ```
+## Testing
 
-### Re-fetching from Materials Project API
-1. Add `MP_API_KEY` to your `.env`.
-2. Run the ingestion script:
-   ```bash
-   cd data
-   python3 fetch_materials.py
-   ```
+### Backend Build
 
----
+```bash
+cd backend
+go build -o server .
+```
 
-## ☁️ Production Deployment (Free)
+### Frontend Build
+
+```bash
+cd frontend
+npm run build
+```
+
+### Dispatcher API Test Suite
+
+Start the backend first, then run:
+
+```bash
+./test_dispatcher.sh
+```
+
+The script exercises polymer, alloy, ceramic, composite, pure-metal, and edge-case queries against `/api/v1/recommend/dispatcher`.
+
+## Optional Database Workflow
+
+The app runs without Postgres, but a database can be used for production-scale querying.
+
+```bash
+cd data
+python3 -m pip install -r requirements.txt
+python3 seed_db.py
+```
+
+Set `DATABASE_URL` before running the seed script or backend.
+
+## Deployment
 
 ### Backend: Hugging Face Spaces
-To host the Go backend for free without any credit card or prepayment:
-1. Create a new **Space** on **[Hugging Face](https://huggingface.co/new-space)**.
-2. Select **Docker** as the SDK and choose the **Blank** template.
-3. Select the **Free (CPU Basic)** hardware.
-4. Upload the files (you can link your GitHub or push manually).
-5. In the Space **Settings**, add a Secret: `OPENROUTER_API_KEY`.
-6. The backend will automatically start and listen on **Port 7860**.
+
+The root [`Dockerfile`](Dockerfile) and backend [`backend/Dockerfile`](backend/Dockerfile) support container deployment. The public API is currently hosted as a Hugging Face Docker Space.
+
+Required secret:
+
+```env
+GEMINI_API_KEY=your_key
+```
+
+Optional secrets:
+
+```env
+OPENROUTER_API_KEY=your_key
+DATABASE_URL=your_postgres_url
+ALLOWED_ORIGINS=https://met-quest.web.app
+```
 
 ### Frontend: Firebase Hosting
-The frontend is hosted on Firebase:
+
+Build and deploy the Vite app:
+
 ```bash
+cd frontend
+npm run build
+cd ..
 firebase deploy --only hosting
 ```
 
----
+Firebase hosting is configured in [`firebase.json`](firebase.json).
 
-## 🏆 Development Team
-Designed and Engineered for **MET-QUEST ’26**. 
-- **Team**: Tech Titans
-- **AI Engine**: LCR-Node-L (Gemini-1.5 Optimized)
+## Project Notes
+
+- The frontend currently calls the legacy `/recommend` endpoint for the recommender tab.
+- The new dispatcher endpoint is implemented and testable through `/recommend/dispatcher`.
+- The CSV catalog is the default operational source, so local development does not require a database.
+- Generated artifacts such as `backend/server`, logs, and Firebase cache files may appear after builds or deployments.
+
+## Team
+
+Built for **MET-QUEST '26** by **Team Tech Titans**.
