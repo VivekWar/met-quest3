@@ -809,8 +809,11 @@ func inferFallbackRecommendedIDs(query string, allMaterials []models.Material, l
 			}
 			if m.ThermalExpansion != nil {
 				score -= *m.ThermalExpansion * 0.2 // lower expansion => lower warp risk
+				if *m.ThermalExpansion > 80.0 {
+					score -= 40.0
+				}
 				if *m.ThermalExpansion > 95.0 {
-					score -= 45.0
+					score -= 120.0
 				}
 			}
 			name := strings.ToLower(m.Name)
@@ -821,13 +824,13 @@ func inferFallbackRecommendedIDs(query string, allMaterials []models.Material, l
 				score -= 140.0
 			}
 			if strings.Contains(name, "abs") {
-				score -= 80.0
+				score -= 180.0
 			}
 			if strings.Contains(name, "polystyrene") || strings.Contains(name, " ps") {
 				score -= 90.0
 			}
 			if strings.Contains(name, "petg") {
-				score += 150.0
+				score += 220.0
 			}
 			if strings.Contains(name, "pc-pbt") {
 				score += 120.0
