@@ -5,18 +5,26 @@ interface Props {
   materials: Material[]
 }
 
-const PROPERTY_DEFS = [
+type PropertyDef = {
+  key: string
+  label: string
+  unit: string
+  precision: number | null
+  getter?: (m: Material) => number | undefined
+}
+
+const PROPERTY_DEFS: PropertyDef[] = [
   { key: 'density',                label: 'Density',         unit: 'g/cm³',      precision: 2 },
-  { key: 'melting_point',          label: 'Melting Point',   unit: 'K',          precision: 0 },
-  { key: 'thermal_conductivity',   label: 'Thermal Cond.',   unit: 'W/(m·K)',    precision: 1 },
-  { key: 'electrical_resistivity', label: 'Resistivity',     unit: 'Ω·m',        precision: null }, // sci notation
-  { key: 'yield_strength',         label: 'Yield Strength', unit: 'MPa',        precision: 0 },
-  { key: 'tensile_strength',       label: 'Tensile Str.',   unit: 'MPa',        precision: 0 },
-  { key: 'youngs_modulus',         label: "Young's Mod.",   unit: 'GPa',        precision: 0 },
-  { key: 'hardness_vickers',       label: 'Hardness',       unit: 'HV',         precision: 0 },
-  { key: 'poissons_ratio',         label: "Poisson's Ratio",unit: '—',          precision: 2 },
-  { key: 'thermal_expansion',      label: 'CTE',            unit: '10⁻⁶/K',    precision: 1 },
-  { key: 'specific_heat',          label: 'Specific Heat',  unit: 'J/(kg·K)',   precision: 0 },
+  { key: 'glass_transition_temp',  label: 'Tg',              unit: '°C',          precision: 0, getter: (m) => m.glass_transition_temp !== undefined ? m.glass_transition_temp - 273.15 : undefined },
+  { key: 'heat_deflection_temp',   label: 'HDT',             unit: '°C',          precision: 0, getter: (m) => m.heat_deflection_temp !== undefined ? m.heat_deflection_temp - 273.15 : undefined },
+  { key: 'processing_temp_max_c',  label: 'Proc. Max',       unit: '°C',          precision: 0 },
+  { key: 'yield_strength',         label: 'Yield Strength',  unit: 'MPa',         precision: 0 },
+  { key: 'youngs_modulus',         label: "Young's Mod.",   unit: 'GPa',         precision: 1 },
+  { key: 'thermal_conductivity',   label: 'Thermal Cond.',   unit: 'W/(m·K)',     precision: 2 },
+  { key: 'thermal_expansion',      label: 'CTE',             unit: '10⁻⁶/K',      precision: 1 },
+  { key: 'tensile_strength',       label: 'Tensile Str.',    unit: 'MPa',         precision: 0 },
+  { key: 'melting_point',          label: 'Melt Pt',         unit: 'K',           precision: 0 },
+  { key: 'specific_heat',          label: 'Specific Heat',   unit: 'J/(kg·K)',    precision: 0 },
 ]
 
 const getCategoryTag = (cat: string) => {
@@ -53,8 +61,9 @@ export const PropertyTable: React.FC<Props> = ({ materials }) => {
 
   const sorted = [...materials].sort((a, b) => {
     if (!sortKey) return 0
-    const av = (a as any)[sortKey] ?? Infinity
-    const bv = (b as any)[sortKey] ?? Infinity
+    const def = PROPERTY_DEFS.find(p => p.key === sortKey)
+    const av = def?.getter ? (def.getter(a) ?? Infinity) : ((a as any)[sortKey] ?? Infinity)
+    const bv = def?.getter ? (def.getter(b) ?? Infinity) : ((b as any)[sortKey] ?? Infinity)
     return sortDir === 'asc' ? av - bv : bv - av
   })
 
@@ -118,7 +127,7 @@ export const PropertyTable: React.FC<Props> = ({ materials }) => {
                   </div>
                 </td>
                 {PROPERTY_DEFS.map(p => {
-                  const raw = (mat as any)[p.key]
+                  const raw = p.getter ? p.getter(mat) : (mat as any)[p.key]
                   const display = formatVal(raw, p.precision)
                   return (
                     <td key={p.key} className={display === '—' ? 'val-null' : ''}>

@@ -27,6 +27,8 @@ export interface Material {
   category: string
   subcategory?: string
   density?: number
+  glass_transition_temp?: number
+  heat_deflection_temp?: number
   melting_point?: number
   boiling_point?: number
   thermal_conductivity?: number
@@ -38,6 +40,9 @@ export interface Material {
   youngs_modulus?: number
   hardness_vickers?: number
   poissons_ratio?: number
+  processing_temp_min_c?: number
+  processing_temp_max_c?: number
+  crystallinity?: number
   source: string
 }
 

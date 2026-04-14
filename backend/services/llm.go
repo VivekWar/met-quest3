@@ -679,6 +679,7 @@ CATALOG (All Available Materials - pick ONLY from here):
 	if len(parsed.RecommendedIDs) == 0 {
 		parsed.RecommendedIDs = inferFallbackRecommendedIDs(originalQuery, allMaterials, 3)
 	}
+	parsed.RecommendedIDs = ensureMinimumRecommendedIDs(originalQuery, parsed.RecommendedIDs, allMaterials, 3)
 
 	if strings.TrimSpace(parsed.ReportMarkdown) == "" && strings.TrimSpace(parsed.LegacyReport) == "" {
 		parsed.Report = buildFallbackReport(originalQuery, parsed.RecommendedIDs, allMaterials)
@@ -957,6 +958,43 @@ func applyDesktopFeasibilityFilter(query string, ids []int, allMaterials []model
 		return ids
 	}
 	return filtered
+}
+
+func ensureMinimumRecommendedIDs(query string, ids []int, allMaterials []models.Material, minCount int) []int {
+	if minCount <= 0 {
+		minCount = 3
+	}
+
+	lookup := map[int]bool{}
+	clean := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 || lookup[id] {
+			continue
+		}
+		lookup[id] = true
+		clean = append(clean, id)
+	}
+
+	if len(clean) >= minCount {
+		return clean
+	}
+
+	fallback := inferFallbackRecommendedIDs(query, allMaterials, minCount*3)
+	for _, id := range fallback {
+		if id <= 0 || lookup[id] {
+			continue
+		}
+		lookup[id] = true
+		clean = append(clean, id)
+		if len(clean) >= minCount {
+			break
+		}
+	}
+
+	if len(clean) > 1 {
+		clean = rerankRecommendedIDs(query, clean, allMaterials)
+	}
+	return clean
 }
 
 func buildFallbackReport(query string, ids []int, allMaterials []models.Material) string {
