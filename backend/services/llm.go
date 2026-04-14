@@ -675,6 +675,10 @@ CATALOG (All Available Materials - pick ONLY from here):
 	if len(parsed.RecommendedIDs) > 1 {
 		parsed.RecommendedIDs = rerankRecommendedIDs(originalQuery, parsed.RecommendedIDs, allMaterials)
 	}
+	parsed.RecommendedIDs = applyDesktopFeasibilityFilter(originalQuery, parsed.RecommendedIDs, allMaterials)
+	if len(parsed.RecommendedIDs) == 0 {
+		parsed.RecommendedIDs = inferFallbackRecommendedIDs(originalQuery, allMaterials, 3)
+	}
 
 	if strings.TrimSpace(parsed.ReportMarkdown) == "" && strings.TrimSpace(parsed.LegacyReport) == "" {
 		parsed.Report = buildFallbackReport(originalQuery, parsed.RecommendedIDs, allMaterials)
@@ -911,6 +915,48 @@ func scoreMaterialForQuery(m models.Material, isDesktopPrint bool, requiresHeatR
 	}
 
 	return score
+}
+
+func applyDesktopFeasibilityFilter(query string, ids []int, allMaterials []models.Material) []int {
+	if len(ids) == 0 {
+		return ids
+	}
+	q := strings.ToLower(query)
+	isDesktopPrint := strings.Contains(q, "3d print") || strings.Contains(q, "fdm") || strings.Contains(q, "desktop printer")
+	if !isDesktopPrint {
+		return ids
+	}
+
+	lookup := map[int]models.Material{}
+	for _, m := range allMaterials {
+		lookup[m.ID] = m
+	}
+
+	filtered := make([]int, 0, len(ids))
+	for _, id := range ids {
+		m, ok := lookup[id]
+		if !ok {
+			continue
+		}
+		if !(strings.EqualFold(m.Category, "Polymer") || strings.EqualFold(m.Category, "Composite")) {
+			continue
+		}
+		if m.ProcessingTempMaxC != nil && *m.ProcessingTempMaxC > 300.0 {
+			continue
+		}
+		if m.ThermalExpansion != nil && *m.ThermalExpansion > 95.0 {
+			continue
+		}
+		if m.GlassTransitionTemp != nil && *m.GlassTransitionTemp < 340.0 {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+
+	if len(filtered) == 0 {
+		return ids
+	}
+	return filtered
 }
 
 func buildFallbackReport(query string, ids []int, allMaterials []models.Material) string {
