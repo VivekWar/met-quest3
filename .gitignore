@@ -18,6 +18,8 @@ data/materials_raw/
 # Go
 backend/bin/
 backend/*.exe
+backend/server
+backend/met-quest-server
 
 # Node / React
 frontend/node_modules/
@@ -31,9 +33,9 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+.codex
 *.swp
 .env
 node_modules/
-backend/met-quest-server
 .env.example
 backend/test_output.json

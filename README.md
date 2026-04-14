@@ -24,6 +24,8 @@ The project combines a Go/Gin backend, a React/Vite frontend, modular materials 
 - Recommends materials from natural-language engineering requirements.
 - Routes advanced queries through a category-aware dispatcher for polymers, alloys, pure metals, ceramics, and composites.
 - Runs physics-focused verification before returning the final recommendation.
+- Applies query-signal safeguards for desktop FDM, nozzle limits, enclosures, service temperature, damping, CNC, cryogenic, and high-pressure requests.
+- Uses deterministic fallback ranking when an LLM response is unavailable, incomplete, or returns too few catalog IDs.
 - Predicts custom alloy properties from element composition using rule-of-mixtures plus LLM refinement.
 - Loads the materials catalog from local CSV files by default, with optional Neon/PostgreSQL support.
 - Falls back gracefully when Postgres or an LLM provider is unavailable.
@@ -37,14 +39,16 @@ graph TD
     API --> CSV[(Modular In-Memory CSV Catalog)]
     API --> PG[(Optional PostgreSQL / Neon)]
     API --> Legacy[Long-Context Recommender]
+    Legacy --> Signals[Physics-Aware Query Signals]
+    Signals --> Fallbacks[Deterministic Ranking + Feasibility Filters]
     API --> Dispatcher[Category Dispatcher]
     Dispatcher --> Search[Specialized Physics Search]
     Search --> Analysis[Scientific Verification]
     API --> Predictor[Alloy Predictor]
     API --> LLM[Google Gemini / OpenRouter Fallback]
     Analysis --> Response[Recommendation Report]
+    Fallbacks --> Response
     Predictor --> Response
-    Legacy --> Response
 ```
 
 ## API Surface
@@ -85,7 +89,7 @@ The backend lives in [`backend/`](backend/) and is written in Go.
 - [`backend/main.go`](backend/main.go): starts the Gin server, loads environment variables, connects to Postgres when available, loads the CSV catalog, configures CORS, and registers routes.
 - [`backend/handlers/recommend.go`](backend/handlers/recommend.go): contains both the legacy recommendation handler and the new dispatcher handler.
 - [`backend/handlers/predict.go`](backend/handlers/predict.go): validates alloy composition requests and calls the predictor service.
-- [`backend/services/llm.go`](backend/services/llm.go): provider-aware Gemini/OpenRouter calls, intent extraction, long-context analysis, dispatcher routing, specialized search, and scientific analysis.
+- [`backend/services/llm.go`](backend/services/llm.go): provider-aware Gemini/OpenRouter calls, intent extraction, long-context analysis, query-signal extraction, fallback ranking, desktop-print feasibility filtering, dispatcher routing, specialized search, and scientific analysis.
 - [`backend/services/csv_db.go`](backend/services/csv_db.go): loads modular CSV catalogs into memory for fast local and production fallback searches.
 - [`backend/services/predictor.go`](backend/services/predictor.go): computes rule-of-mixtures baselines and asks the LLM for thermodynamic refinement.
 - [`backend/db/postgres.go`](backend/db/postgres.go): optional PostgreSQL connection pool with mock-mode fallback.
@@ -110,6 +114,19 @@ The dispatcher endpoint adds the newest recommendation flow:
 3. `ExtractIntent()` converts natural language constraints into filter ranges.
 4. Category-specific search ranks candidates using relevant engineering properties.
 5. `ScientificAnalysis()` performs physics-driven checks, merit-index reasoning, failure rejection notes, manufacturing feasibility, and safety-margin analysis.
+
+## Recommendation Reliability
+
+The legacy `/api/v1/recommend` path now has an additional validation layer around the LLM result:
+
+1. `extractQuerySignals()` detects important manufacturing and service constraints such as desktop FDM, professional heated chambers, nozzle temperature caps, continuous service temperature, vibration damping, CNC machining, cryogenic use, hydraulic pressure, and high-strength requirements.
+2. `LongContextAnalyze()` still asks the LLM to reason over a compact material catalog, but it no longer trusts the model blindly.
+3. If the LLM returns missing IDs, invented IDs, invalid JSON, or too few candidates, `inferFallbackRecommendedIDs()` and `ensureMinimumRecommendedIDs()` fill the result using deterministic material scoring.
+4. `rerankRecommendedIDs()` reorders candidates against the extracted physics signals.
+5. `applyDesktopFeasibilityFilter()` removes desktop-FDM-infeasible picks such as wrong material classes, excessive processing temperature, excessive thermal expansion, or poor heat margin.
+6. Impossible desktop-FDM requests, such as high-pressure manifolds or extreme-temperature service, return an explicit process-feasibility warning instead of a misleading material recommendation.
+
+This layer keeps the UI table populated with practical alternatives while still allowing the LLM to write the engineering narrative.
 
 More detail is available in:
 
@@ -268,6 +285,7 @@ Firebase hosting is configured in [`firebase.json`](firebase.json).
 - The frontend currently calls the legacy `/recommend` endpoint for the recommender tab.
 - The new dispatcher endpoint is implemented and testable through `/recommend/dispatcher`.
 - The CSV catalog is the default operational source, so local development does not require a database.
+- The recommender now guarantees practical fallback candidates for normal cases and returns a no-recommendation warning for physically impossible desktop-FDM requests.
 - Generated artifacts such as `backend/server`, logs, and Firebase cache files may appear after builds or deployments.
 
 ## Team
