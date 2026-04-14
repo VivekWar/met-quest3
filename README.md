@@ -107,17 +107,37 @@ Provider flow:
 
 ## Dispatcher Pipeline
 
-The dispatcher endpoint adds the newest recommendation flow:
+The dispatcher endpoint is the validation-focused recommendation flow. It is designed so the LLM explains and verifies the decision, while deterministic Go guardrails enforce manufacturing feasibility and first-pass physics.
 
-1. `RouteQuery()` classifies the query into `Polymers`, `Alloys`, `Pure_Metals`, `Ceramics`, or `Composites`.
-2. The backend loads candidates from Postgres when available, otherwise from the in-memory CSV catalog.
-3. `ExtractIntent()` converts natural language constraints into filter ranges.
-4. Category-specific search ranks candidates using relevant engineering properties.
-5. `ScientificAnalysis()` performs physics-driven checks, merit-index reasoning, failure rejection notes, manufacturing feasibility, and safety-margin analysis.
+Input-to-output flow:
+
+1. The user submits a natural-language query to `/api/v1/recommend/dispatcher`.
+2. `RouteQuery()` asks the LLM to classify the request into `Polymers`, `Alloys`, `Pure_Metals`, `Ceramics`, or `Composites`.
+3. `InferCategoryHeuristic()` and route guardrails correct obvious LLM mistakes, such as desktop FDM requests being routed to metals, cryogenic CNC requests being routed to polymers, or conductivity requests being routed to alloys instead of pure metals.
+4. The backend loads materials from Postgres when available, otherwise from the in-memory CSV catalog.
+5. `ExtractIntent()` asks the LLM to convert service requirements and hardware limits into structured filters. Celsius service temperatures are converted to Kelvin before comparing against catalog properties such as `glass_transition_temp`, `heat_deflection_temp`, and `melting_point`.
+6. Category-specific search scans the full category, applies hard filters, ranks all valid candidates using engineering scores, and only then returns the top candidates.
+7. `ScientificAnalysis()` asks the LLM to verify the short list with first-principles reasoning, merit-index calculations, rejection notes, manufacturing advice, and safety margins.
+8. `chooseDeterministicTopCandidate()` re-scores the analyzed candidates and enforces the final top choice so the model cannot recommend a material that violates the process or physics gate.
+9. The handler maps the selected name back to a real catalog material and returns the top recommendation, alternatives, physics analysis, and pipeline explanation.
+
+Important prompt and guardrail behavior:
+
+- Desktop FDM is a hard manufacturing gate. If the user says Ender 3, Prusa, hobby printer, desktop printer, FDM, or plastic filament, the route is locked to printable polymer/composite candidates.
+- Hobby FDM rejects or heavily penalizes materials that need high-temperature enclosed hardware, such as PEEK, Ultem/PEI, and enclosure-sensitive ABS.
+- PETG is boosted for the common middle-ground case where PLA is too close to its glass transition temperature but ABS or PEEK is not practical on an open desktop printer.
+- PLA is boosted for indoor aesthetic scale models where surface finish, dimensional stability, and fast printing matter more than heat resistance.
+- Professional FDM queries with a heated chamber and high nozzle capability can select high-Tg engineering polymers such as polycarbonate.
+- Cryogenic, pressure-tight, CNC, and non-porous requirements route toward alloys, with aluminum alloys favored for ductility at low temperature.
+- Maximum electrical or thermal conductivity routes toward pure metals, with copper favored over alloys because alloying increases electron and phonon scattering.
+- Abrasive wear, furnace, viewport, and extreme-temperature requirements route toward ceramics such as alumina, silicon carbide, or zirconia.
+- Physically impossible desktop-FDM requests, such as plastic filament at rocket-nozzle temperatures, return `NO_FEASIBLE_MATERIAL` instead of a misleading recommendation.
+
+This dispatcher path is the best endpoint for the MET-QUEST validation cases covering PETG, PLA, PC, aluminum alloys, TPU-like damping materials, ceramics, copper, PTFE/PEEK chemical resistance, and hard rejection cases.
 
 ## Recommendation Reliability
 
-The legacy `/api/v1/recommend` path now has an additional validation layer around the LLM result:
+Both recommendation paths use extra validation around the LLM result:
 
 1. `extractQuerySignals()` detects important manufacturing and service constraints such as desktop FDM, professional heated chambers, nozzle temperature caps, continuous service temperature, vibration damping, CNC machining, cryogenic use, hydraulic pressure, and high-strength requirements.
 2. `LongContextAnalyze()` still asks the LLM to reason over a compact material catalog, but it no longer trusts the model blindly.
@@ -269,7 +289,7 @@ ALLOWED_ORIGINS=https://met-quest.web.app
 
 ### Frontend: Firebase Hosting
 
-Build and deploy the Vite app:
+Build and deploy the Vite app when frontend files change:
 
 ```bash
 cd frontend
@@ -279,6 +299,8 @@ firebase deploy --only hosting
 ```
 
 Firebase hosting is configured in [`firebase.json`](firebase.json).
+
+Backend production updates are deployed through the Hugging Face Spaces remote. Frontend production updates are deployed through Firebase Hosting.
 
 ## Project Notes
 

@@ -250,23 +250,32 @@ func RecommendWithDispatcher(c *gin.Context) {
 
 	// Find the top candidate in the candidates list
 	if analysis.TopCandidate != "" {
-		for i, m := range candidates {
-			if m.Name == analysis.TopCandidate || (i == 0 && topRecommendation.ID == 0) {
-				topRecommendation = m
-				alternatives = candidates[1:]
-				break
+		if analysis.TopCandidate == "NO_FEASIBLE_MATERIAL" {
+			alternatives = candidates
+		} else {
+			for i, m := range candidates {
+				if m.Name == analysis.TopCandidate {
+					topRecommendation = m
+					alternatives = append(alternatives, candidates[:i]...)
+					alternatives = append(alternatives, candidates[i+1:]...)
+					break
+				}
 			}
 		}
 	}
 
-	if topRecommendation.ID == 0 && len(candidates) > 0 {
+	if topRecommendation.ID == 0 && analysis.TopCandidate != "NO_FEASIBLE_MATERIAL" && len(candidates) > 0 {
 		topRecommendation = candidates[0]
 		if len(candidates) > 1 {
 			alternatives = candidates[1:]
 		}
 	}
 
-	pipelineSteps = append(pipelineSteps, "✅ Top recommendation: "+topRecommendation.Name)
+	if analysis.TopCandidate == "NO_FEASIBLE_MATERIAL" {
+		pipelineSteps = append(pipelineSteps, "⛔ No feasible material for the requested process")
+	} else {
+		pipelineSteps = append(pipelineSteps, "✅ Top recommendation: "+topRecommendation.Name)
+	}
 
 	// ── Return Enhanced Response ────────────────────────────────────────────
 	resp := DispatcherResponse{
