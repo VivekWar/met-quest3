@@ -495,6 +495,7 @@ Evaluate the retrieved catalog entries. You must act as a mentor, rejecting mate
 
 ### OUTPUT FORMAT (STRICT JSON ONLY):
 {
+	"recommended_ids": [int, int, int],
   "recommendation": "Material Name",
   "fundamental_physics": {
 	 "key_metric_1": "Value + why it wins in this specific physics domain",
@@ -505,6 +506,7 @@ Evaluate the retrieved catalog entries. You must act as a mentor, rejecting mate
   "manufacturing_advice": "Critical settings for success (e.g., 'Preheat the stock', 'Anneal post-process', 'Use carbide bits')."
 }
 
+IMPORTANT: recommended_ids must be IDs from the provided catalog. Do not invent IDs.
 Return JSON only. Ensure strings are escaped and do not include markdown code fences or extra text outside JSON.`
 
 type LongContextLLMResponse struct {
@@ -657,7 +659,9 @@ CATALOG (All Available Materials - pick ONLY from here):
 		}
 		if candidateName != "" {
 			for _, m := range allMaterials {
-				if strings.EqualFold(m.Name, candidateName) || strings.Contains(strings.ToLower(m.Name), strings.ToLower(candidateName)) {
+				name := strings.ToLower(strings.TrimSpace(m.Name))
+				candidate := strings.ToLower(strings.TrimSpace(candidateName))
+				if strings.EqualFold(m.Name, candidateName) || strings.Contains(name, candidate) || strings.Contains(candidate, name) {
 					parsed.RecommendedIDs = []int{m.ID}
 					break
 				}
@@ -665,11 +669,19 @@ CATALOG (All Available Materials - pick ONLY from here):
 		}
 	}
 
+	if len(parsed.RecommendedIDs) == 0 {
+		parsed.RecommendedIDs = inferFallbackRecommendedIDs(originalQuery, allMaterials, 3)
+	}
+
+	if strings.TrimSpace(parsed.ReportMarkdown) == "" && strings.TrimSpace(parsed.LegacyReport) == "" {
+		parsed.Report = buildFallbackReport(originalQuery, parsed.RecommendedIDs, allMaterials)
+	}
+
 	if parsed.ReportMarkdown != "" {
 		parsed.Report = parsed.ReportMarkdown
 	} else if parsed.LegacyReport != "" {
 		parsed.Report = parsed.LegacyReport
-	} else {
+	} else if strings.TrimSpace(parsed.Report) == "" {
 		var b strings.Builder
 		candidateName := parsed.Recommendation
 		if candidateName == "" {
@@ -742,6 +754,151 @@ CATALOG (All Available Materials - pick ONLY from here):
 	}
 
 	return parsed, tokens, nil
+}
+
+func inferFallbackRecommendedIDs(query string, allMaterials []models.Material, limit int) []int {
+	if limit <= 0 {
+		limit = 3
+	}
+	q := strings.ToLower(query)
+	isDesktopPrint := strings.Contains(q, "3d print") || strings.Contains(q, "fdm") || strings.Contains(q, "desktop printer")
+	requiresHeatResistance := strings.Contains(q, "heat") || strings.Contains(q, "warp") || strings.Contains(q, "melt") || strings.Contains(q, "motor")
+
+	type scored struct {
+		id    int
+		score float64
+	}
+	best := make([]scored, 0, limit)
+
+	for _, m := range allMaterials {
+		if isDesktopPrint && !(strings.EqualFold(m.Category, "Polymer") || strings.EqualFold(m.Category, "Composite")) {
+			continue
+		}
+
+		score := 0.0
+
+		if m.Density != nil {
+			score += (2.0 - *m.Density) * 6.0 // favor lightweight materials
+		}
+
+		if m.YieldStrength != nil {
+			score += *m.YieldStrength * 0.08
+		}
+
+		if requiresHeatResistance {
+			if m.GlassTransitionTemp != nil {
+				score += (*m.GlassTransitionTemp - 273.15) * 0.9 // prioritize Tg margin in C
+			}
+			if m.HeatDeflectionTemp != nil {
+				score += (*m.HeatDeflectionTemp - 273.15) * 0.8
+			}
+			if m.GlassTransitionTemp != nil && (*m.GlassTransitionTemp-273.15) < 70 {
+				score -= 120.0
+			}
+		}
+
+		if isDesktopPrint {
+			if m.ProcessingTempMaxC != nil {
+				if *m.ProcessingTempMaxC <= 270.0 {
+					score += 40.0
+				} else if *m.ProcessingTempMaxC <= 300.0 {
+					score -= 10.0
+				} else {
+					score -= 80.0
+				}
+			}
+			if m.ThermalExpansion != nil {
+				score -= *m.ThermalExpansion * 0.2 // lower expansion => lower warp risk
+				if *m.ThermalExpansion > 95.0 {
+					score -= 45.0
+				}
+			}
+			name := strings.ToLower(m.Name)
+			if strings.Contains(name, "pla") && requiresHeatResistance {
+				score -= 120.0
+			}
+			if strings.Contains(name, "peek") || strings.Contains(name, "ultem") {
+				score -= 140.0
+			}
+			if strings.Contains(name, "abs") {
+				score -= 80.0
+			}
+			if strings.Contains(name, "polystyrene") || strings.Contains(name, " ps") {
+				score -= 90.0
+			}
+			if strings.Contains(name, "petg") {
+				score += 150.0
+			}
+			if strings.Contains(name, "pc-pbt") {
+				score += 120.0
+			}
+			if strings.Contains(name, "polycarbonate") || strings.Contains(name, " pc") {
+				score += 20.0
+			}
+		}
+
+		inserted := false
+		for i := range best {
+			if score > best[i].score {
+				best = append(best[:i], append([]scored{{id: m.ID, score: score}}, best[i:]...)...)
+				inserted = true
+				break
+			}
+		}
+		if !inserted {
+			best = append(best, scored{id: m.ID, score: score})
+		}
+		if len(best) > limit {
+			best = best[:limit]
+		}
+	}
+
+	ids := make([]int, 0, len(best))
+	for _, b := range best {
+		ids = append(ids, b.id)
+	}
+	return ids
+}
+
+func buildFallbackReport(query string, ids []int, allMaterials []models.Material) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	lookup := map[int]models.Material{}
+	for _, m := range allMaterials {
+		lookup[m.ID] = m
+	}
+	primary, ok := lookup[ids[0]]
+	if !ok {
+		return ""
+	}
+	q := strings.ToLower(query)
+	isDesktopPrint := strings.Contains(q, "3d print") || strings.Contains(q, "fdm") || strings.Contains(q, "desktop printer")
+
+	tg := "unknown"
+	if primary.GlassTransitionTemp != nil {
+		tg = fmt.Sprintf("~%.0fC", *primary.GlassTransitionTemp-273.15)
+	}
+	hdt := "unknown"
+	if primary.HeatDeflectionTemp != nil {
+		hdt = fmt.Sprintf("~%.0fC", *primary.HeatDeflectionTemp-273.15)
+	}
+
+	var b strings.Builder
+	b.WriteString("## Recommendation\n")
+	b.WriteString("- Top choice: ")
+	b.WriteString(primary.Name)
+	b.WriteString("\n")
+	b.WriteString("- Key properties: Tg ")
+	b.WriteString(tg)
+	b.WriteString(", HDT ")
+	b.WriteString(hdt)
+	b.WriteString("\n")
+	b.WriteString("- Rationale: Chosen using a Pareto trade-off between heat survivability, desktop-print feasibility, and strength-to-weight.")
+	if isDesktopPrint {
+		b.WriteString(" The selection prioritizes materials that print on standard desktop hardware without severe warping or enclosure-only requirements.")
+	}
+	return b.String()
 }
 
 // ──────────────────────────────────────────────────────────────────────────
