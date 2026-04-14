@@ -9,13 +9,23 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vivek/met-quest/models"
 )
 
 const openRouterBaseURL = "https://openrouter.ai/api/v1/chat/completions"
+
+var (
+	retryDelayRegex = regexp.MustCompile(`"retryDelay"\s*:\s*"([0-9]+)s"`)
+	modelBackoff    = struct {
+		sync.Mutex
+		until map[string]time.Time
+	}{until: map[string]time.Time{}}
+)
 
 // ──────────────────────────────────────────────────────────────────────────
 //  AI Provider types
@@ -115,6 +125,11 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 		}
 		log.Printf("🛡️  Attempting Google AI Tier (Key: %s)", maskKey(activeGoogleKey))
 		for _, model := range googleModels {
+			if skip, until := shouldSkipModel(model); skip {
+				log.Printf("⏭️  Skipping Google AI %s until %s (backoff active)", model, until.Format(time.RFC3339))
+				continue
+			}
+
 			// Try v1beta first
 			text, tokens, status, err := callGoogleAI(ctx, activeGoogleKey, model, prompt, temperature, maxTokens, "v1beta")
 
@@ -127,11 +142,28 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 			if err == nil {
 				if !isCompleteJSONObject(text) {
 					err = fmt.Errorf("model %s returned incomplete/invalid JSON payload", model)
+					markModelBackoff(model, 15*time.Second)
 				} else {
+					log.Printf("✅ Google AI %s succeeded", model)
+					clearModelBackoff(model)
 					return text, tokens, nil
 				}
 			}
 			lastErr = err
+
+			if status == http.StatusTooManyRequests {
+				if d := extractRetryDelay(err.Error()); d > 0 {
+					markModelBackoff(model, d)
+				}
+				if hasZeroQuotaLimit(err.Error(), model) {
+					// Daily/project free-tier zero quota is not transient for this run.
+					markModelBackoff(model, 24*time.Hour)
+				}
+			}
+			if status == http.StatusServiceUnavailable {
+				markModelBackoff(model, 20*time.Second)
+			}
+
 			// Only treat auth failures as fatal; timeout/network issues (status=0)
 			// should continue to next model in the fallback chain.
 			if status == http.StatusUnauthorized {
@@ -151,6 +183,7 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 			if !isCompleteJSONObject(text) {
 				return "", 0, fmt.Errorf("openrouter returned incomplete/invalid JSON payload")
 			}
+			log.Printf("✅ OpenRouter fallback succeeded")
 			return text, tokens, nil
 		}
 		return "", 0, fmt.Errorf("all LLM providers failed: %w", err)
@@ -180,6 +213,57 @@ func isCompleteJSONObject(raw string) bool {
 		return false
 	}
 	return json.Valid([]byte(trimmed))
+}
+
+func shouldSkipModel(model string) (bool, time.Time) {
+	modelBackoff.Lock()
+	defer modelBackoff.Unlock()
+	until, ok := modelBackoff.until[model]
+	if !ok {
+		return false, time.Time{}
+	}
+	if time.Now().After(until) {
+		delete(modelBackoff.until, model)
+		return false, time.Time{}
+	}
+	return true, until
+}
+
+func markModelBackoff(model string, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	modelBackoff.Lock()
+	defer modelBackoff.Unlock()
+	until := time.Now().Add(d)
+	if prev, ok := modelBackoff.until[model]; ok && prev.After(until) {
+		return
+	}
+	modelBackoff.until[model] = until
+}
+
+func clearModelBackoff(model string) {
+	modelBackoff.Lock()
+	defer modelBackoff.Unlock()
+	delete(modelBackoff.until, model)
+}
+
+func extractRetryDelay(errText string) time.Duration {
+	m := retryDelayRegex.FindStringSubmatch(errText)
+	if len(m) != 2 {
+		return 0
+	}
+	sec := 0
+	_, err := fmt.Sscanf(m[1], "%d", &sec)
+	if err != nil || sec <= 0 {
+		return 0
+	}
+	return time.Duration(sec) * time.Second
+}
+
+func hasZeroQuotaLimit(errText, model string) bool {
+	needle := "limit: 0, model: " + model
+	return strings.Contains(errText, needle)
 }
 
 func maskKey(key string) string {
