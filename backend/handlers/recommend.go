@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -176,23 +177,23 @@ func RecommendWithDispatcher(c *gin.Context) {
 	// Route to category-specific search
 	switch routedCategory {
 	case "Polymers":
-		candidates = services.SearchPolymers(ctx, constraints, allMaterials, 3)
+		candidates = services.SearchPolymers(ctx, constraints, allMaterials, 15)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchPolymers: found %d candidates", len(candidates)))
 
 	case "Alloys":
-		candidates = services.SearchAlloys(ctx, constraints, allMaterials, 3)
+		candidates = services.SearchAlloys(ctx, constraints, allMaterials, 15)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchAlloys: found %d candidates", len(candidates)))
 
 	case "Pure_Metals":
-		candidates = services.SearchPureMetals(ctx, constraints, allMaterials, 3)
+		candidates = services.SearchPureMetals(ctx, constraints, allMaterials, 15)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchPureMetals: found %d candidates", len(candidates)))
 
 	case "Ceramics":
-		candidates = services.SearchCeramics(ctx, constraints, allMaterials, 3)
+		candidates = services.SearchCeramics(ctx, constraints, allMaterials, 15)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchCeramics: found %d candidates", len(candidates)))
 
 	case "Composites":
-		candidates = services.SearchComposites(ctx, constraints, allMaterials, 3)
+		candidates = services.SearchComposites(ctx, constraints, allMaterials, 15)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchComposites: found %d candidates", len(candidates)))
 
 	default:
@@ -204,6 +205,13 @@ func RecommendWithDispatcher(c *gin.Context) {
 			candidates = allMaterials
 		}
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("⚠️  Generic search: %d candidates", len(candidates)))
+	}
+
+	if len(candidates) < 3 {
+		fallbackKeyword := keywordCategoryForRoute(routedCategory)
+		cascade := keywordCascadeSearch(allMaterials, req.Query, fallbackKeyword, 15)
+		candidates = mergeUniqueCandidates(candidates, cascade, 15)
+		pipelineSteps = append(pipelineSteps, fmt.Sprintf("↪️  Cascade keyword fallback: merged to %d candidates", len(candidates)))
 	}
 
 	if len(candidates) == 0 {
@@ -303,4 +311,74 @@ func mapRoutedCategoryToDomain(routedCategory string) string {
 	default:
 		return "Overall (Top 1000)"
 	}
+}
+
+func keywordCategoryForRoute(routedCategory string) string {
+	switch routedCategory {
+	case "Polymers":
+		return "polymer"
+	case "Alloys", "Pure_Metals":
+		return "metal"
+	case "Ceramics":
+		return "ceramic"
+	case "Composites":
+		return "composite"
+	default:
+		return ""
+	}
+}
+
+func keywordCascadeSearch(materials []models.Material, query, categoryHint string, limit int) []models.Material {
+	if limit <= 0 {
+		limit = 15
+	}
+	q := strings.ToLower(query)
+	var out []models.Material
+	for _, m := range materials {
+		name := strings.ToLower(m.Name)
+		cat := strings.ToLower(m.Category)
+		sub := ""
+		if m.Subcategory != nil {
+			sub = strings.ToLower(*m.Subcategory)
+		}
+
+		catMatch := categoryHint == "" || strings.Contains(cat, categoryHint) || strings.Contains(sub, categoryHint)
+		nameMatch := strings.Contains(q, name) || strings.Contains(name, "petg") || strings.Contains(name, "pc") || strings.Contains(name, "poly")
+		if catMatch || nameMatch {
+			out = append(out, m)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+func mergeUniqueCandidates(base, extra []models.Material, limit int) []models.Material {
+	if limit <= 0 {
+		limit = 15
+	}
+	seen := map[int]bool{}
+	merged := make([]models.Material, 0, limit)
+	for _, m := range base {
+		if seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		merged = append(merged, m)
+		if len(merged) >= limit {
+			return merged
+		}
+	}
+	for _, m := range extra {
+		if seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		merged = append(merged, m)
+		if len(merged) >= limit {
+			return merged
+		}
+	}
+	return merged
 }

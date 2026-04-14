@@ -432,19 +432,14 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 		intent.Filters["hardness_vickers"] = models.RangeFilter{Max: llmIntent.HardwareLimits.MaxHardnessVickers}
 	}
 
-	if strings.Contains(strings.ToLower(llmIntent.ProcessLock), "fdm") || strings.Contains(strings.ToLower(llmIntent.ProcessLock), "hobby") {
-		// Do not aggressively remap category; preserve LLM category unless absent.
-		if intent.Category == "" || strings.EqualFold(intent.Category, "null") {
-			intent.Category = "Polymer"
+	if strings.Contains(strings.ToLower(llmIntent.ProcessLock), "fdm") || strings.Contains(strings.ToLower(llmIntent.ProcessLock), "3d print") {
+		// Hard lock: desktop-class FDM requests must route to printable classes.
+		intent.Category = "Polymer"
+		limitC := 270.0
+		if llmIntent.HardwareLimits.ThermalCeilingC != nil {
+			limitC = *llmIntent.HardwareLimits.ThermalCeilingC
 		}
-		intent.Filters["melting_point"] = models.RangeFilter{Max: func() *float64 {
-			if llmIntent.HardwareLimits.ThermalCeilingC != nil {
-				v := *llmIntent.HardwareLimits.ThermalCeilingC + 273.15
-				return &v
-			}
-			v := 543.15
-			return &v
-		}()}
+		intent.Filters["max_processing_temp"] = models.RangeFilter{Max: &limitC}
 	}
 
 	if strings.Contains(strings.ToLower(llmIntent.MeritIndex), "sigma/rho") {
@@ -1000,8 +995,8 @@ func RouteQuery(ctx context.Context, query string) (string, int, error) {
 
 // SearchAlloys searches alloy-specific columns: Yield_Strength, Temper, Fatigue_Limit, Corrosion_Rating
 func SearchAlloys(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
-	if limit <= 0 || limit > 10 {
-		limit = 3
+	if limit <= 0 || limit > 15 {
+		limit = 15
 	}
 
 	var filtered []models.Material
@@ -1041,6 +1036,9 @@ func SearchAlloys(ctx context.Context, constraints map[string]interface{}, mater
 		}
 
 		filtered = append(filtered, m)
+		if len(filtered) >= limit {
+			break
+		}
 	}
 
 	// Sort by yield strength (descending) for alloys
@@ -1070,8 +1068,8 @@ func SearchAlloys(ctx context.Context, constraints map[string]interface{}, mater
 
 // SearchPolymers searches polymer-specific columns: Glass_Transition_Temp, HDT, Processing_Temp, Crystallinity
 func SearchPolymers(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
-	if limit <= 0 || limit > 10 {
-		limit = 3
+	if limit <= 0 || limit > 15 {
+		limit = 15
 	}
 
 	var filtered []models.Material
@@ -1123,6 +1121,9 @@ func SearchPolymers(ctx context.Context, constraints map[string]interface{}, mat
 		}
 
 		filtered = append(filtered, m)
+		if len(filtered) >= limit {
+			break
+		}
 	}
 
 	// Sort by glass transition temp (descending) for polymers
@@ -1152,8 +1153,8 @@ func SearchPolymers(ctx context.Context, constraints map[string]interface{}, mat
 
 // SearchCeramics searches ceramic-specific columns: Hardness_Vickers, Thermal_Shock_Resistance, Fracture_Toughness
 func SearchCeramics(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
-	if limit <= 0 || limit > 10 {
-		limit = 3
+	if limit <= 0 || limit > 15 {
+		limit = 15
 	}
 
 	var filtered []models.Material
@@ -1200,6 +1201,9 @@ func SearchCeramics(ctx context.Context, constraints map[string]interface{}, mat
 		}
 
 		filtered = append(filtered, m)
+		if len(filtered) >= limit {
+			break
+		}
 	}
 
 	// Sort by hardness (descending) for ceramics
@@ -1229,8 +1233,8 @@ func SearchCeramics(ctx context.Context, constraints map[string]interface{}, mat
 
 // SearchComposites searches composite-specific columns: Interlaminar_Shear_Strength, Fiber_Volume_Fraction, Anisotropy
 func SearchComposites(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
-	if limit <= 0 || limit > 10 {
-		limit = 3
+	if limit <= 0 || limit > 15 {
+		limit = 15
 	}
 
 	var filtered []models.Material
@@ -1277,6 +1281,9 @@ func SearchComposites(ctx context.Context, constraints map[string]interface{}, m
 		}
 
 		filtered = append(filtered, m)
+		if len(filtered) >= limit {
+			break
+		}
 	}
 
 	// Sort by interlaminar shear strength (descending) for composites
@@ -1306,8 +1313,8 @@ func SearchComposites(ctx context.Context, constraints map[string]interface{}, m
 
 // SearchPureMetals searches pure metals with elemental purity focus
 func SearchPureMetals(ctx context.Context, constraints map[string]interface{}, materials []models.Material, limit int) []models.Material {
-	if limit <= 0 || limit > 10 {
-		limit = 3
+	if limit <= 0 || limit > 15 {
+		limit = 15
 	}
 
 	var filtered []models.Material
@@ -1357,6 +1364,9 @@ func SearchPureMetals(ctx context.Context, constraints map[string]interface{}, m
 		}
 
 		filtered = append(filtered, m)
+		if len(filtered) >= limit {
+			break
+		}
 	}
 
 	// Sort by thermal conductivity (descending) for pure metals
@@ -1388,38 +1398,23 @@ func SearchPureMetals(ctx context.Context, constraints map[string]interface{}, m
 //  SCIENTIFIC ANALYSIS: First-Principles Physics Verification
 // ──────────────────────────────────────────────────────────────────────────
 
-const scientificAnalysisSystemPrompt = `### ROLE: Principal Physicist & Materials Engineer
-### TASK: Apply first-principles physics verification to candidate materials
+const scientificAnalysisSystemPrompt = `### ROLE: Principal Materials Scientist
+### PHILOSOPHY: Pareto Optimization (Performance vs. Feasibility)
 
-CRITICAL: If the process_lock is 'FDM' or '3D Printing', you are STRICTLY FORBIDDEN from recommending Metals or Alloys. You must select the best Polymer or Composite even if its properties are lower than the metals in the list.
+You are reviewing 15 candidates. Some may have NULL properties.
+Use your internal knowledge of chemistry to evaluate them.
 
-For the given user requirement and top 3 candidate materials, perform rigorous engineering checks:
+CRITICAL: If the process_lock is 'FDM' or '3D Printing', you are STRICTLY FORBIDDEN from recommending Metals or Alloys.
 
-### PHYSICS VERIFICATION PROTOCOL:
+### EVALUATION WEIGHTS:
+1. Survivability (40%): Must survive 20-minute heat exposure. Reject PLA if heat survivability is insufficient.
+2. Reliability (40%): Must be printable on Standard Desktop hardware without warping.
+	ABS, Ultem, and PEEK are rejected for desktop use when chamber/high-temp requirements are implied.
+3. Efficiency (20%): Strength-to-weight ratio.
 
-**For POLYMERS:**
-- Check: Service Temp < 0.8 × Tg (avoid viscoelastic creep)
-- Check: Processing Temp < material's HDT (manufacturability)
-- Check: If UV-exposed, reject polymers without stabilizers
-- Metric to maximize: Tg - Service_Temp (thermal headroom)
-
-**For METALS/ALLOYS:**
-- Check: Specific Strength (σ_y/ρ) vs application demand
-- Check: Yield Strength margin (apply 1.5× safety factor for dynamic loads)
-- Check: Fatigue limit ≈ 0.3-0.6 × Ultimate Tensile Strength
-- Metric to maximize: σ_y/ρ (strength-to-weight ratio)
-
-**For CERAMICS:**
-- Check: Thermal Shock Resistance (R = σ_f × k / E / α)
-- Check: Fracture Toughness ≥ 3 MPa√m for impact resistance
-- Check: Weibull Modulus ≥ 10 for reliability
-- Metric to maximize: R (thermal shock resistance)
-
-**For COMPOSITES:**
-- Check: Fiber orientation (0°/90°/±45°) matches load direction
-- Check: ILSS (Interlaminar Shear Strength) ≥ 50 MPa minimum
-- Check: Fiber volume fraction ≥ 50% indicates quality
-- Metric to maximize: E/ρ (specific modulus)
+### THE PETG LOGIC:
+Recommend the material that represents the optimal compromise.
+If PLA is too weak for heat but ABS is too difficult to print, select middle-ground options such as PETG or PC-PBT when available.
 
 ### OUTPUT SCHEMA (STRICT JSON ONLY):
 {
