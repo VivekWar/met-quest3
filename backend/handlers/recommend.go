@@ -207,6 +207,16 @@ func RecommendWithDispatcher(c *gin.Context) {
 	}
 
 	if len(candidates) == 0 {
+		log.Printf("⚠️ 0 results in specialized search. Falling back to Domain Keyword search.")
+		fallbackDomain := mapRoutedCategoryToDomain(routedCategory)
+		candidates = services.FilterByDomain(fallbackDomain, allMaterials)
+		if len(candidates) > 10 {
+			candidates = candidates[:10]
+		}
+		pipelineSteps = append(pipelineSteps, fmt.Sprintf("↩️  Panic fallback (%s): %d candidates", fallbackDomain, len(candidates)))
+	}
+
+	if len(candidates) == 0 {
 		c.JSON(http.StatusOK, DispatcherResponse{
 			Query:               req.Query,
 			RoutedCategory:      routedCategory,
@@ -278,4 +288,19 @@ func joinSteps(steps []string) string {
 		result += step
 	}
 	return result
+}
+
+func mapRoutedCategoryToDomain(routedCategory string) string {
+	switch routedCategory {
+	case "Polymers":
+		return "Plastics & Polymers"
+	case "Alloys", "Pure_Metals":
+		return "Automotive & Transportation"
+	case "Ceramics":
+		return "High-Temperature / Refractory"
+	case "Composites":
+		return "Advanced Composites"
+	default:
+		return "Overall (Top 1000)"
+	}
 }

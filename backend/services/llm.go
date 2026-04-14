@@ -419,7 +419,13 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 	}
 
 	if llmIntent.SearchParameters.PrimaryMetric.Field != "" {
-		intent.Filters[llmIntent.SearchParameters.PrimaryMetric.Field] = models.RangeFilter{Min: llmIntent.SearchParameters.PrimaryMetric.Min}
+		f := llmIntent.SearchParameters.PrimaryMetric.Field
+		intent.Filters[f] = models.RangeFilter{Min: llmIntent.SearchParameters.PrimaryMetric.Min}
+	}
+
+	if llmIntent.HardwareLimits.ThermalCeilingC != nil {
+		limitK := *llmIntent.HardwareLimits.ThermalCeilingC + 273.15
+		intent.Filters["melting_point"] = models.RangeFilter{Max: &limitK}
 	}
 
 	if llmIntent.HardwareLimits.MaxHardnessVickers != nil {
@@ -1008,28 +1014,28 @@ func SearchAlloys(ctx context.Context, constraints map[string]interface{}, mater
 
 		// Priority check: Yield strength (core alloy property)
 		if minYield, ok := constraints["min_yield_strength"].(float64); ok {
-			if m.YieldStrength == nil || *m.YieldStrength < minYield {
+			if m.YieldStrength != nil && *m.YieldStrength < minYield {
 				continue
 			}
 		}
 
 		// Thermal ceiling check (processability)
 		if maxMelt, ok := constraints["max_melting_point"].(float64); ok {
-			if m.MeltingPoint == nil || *m.MeltingPoint > maxMelt {
+			if m.MeltingPoint != nil && *m.MeltingPoint > maxMelt {
 				continue
 			}
 		}
 
 		// Corrosion resistance approximation (electrical resistivity proxy)
 		if minResist, ok := constraints["min_corrosion_resistance"].(float64); ok {
-			if m.ElectricalResistivity == nil || *m.ElectricalResistivity < minResist {
+			if m.ElectricalResistivity != nil && *m.ElectricalResistivity < minResist {
 				continue
 			}
 		}
 
 		// Fatigue proxy: Young's modulus (higher stiffness = better fatigue resistance)
 		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok {
-			if m.YoungsModulus == nil || *m.YoungsModulus < minModulus {
+			if m.YoungsModulus != nil && *m.YoungsModulus < minModulus {
 				continue
 			}
 		}
@@ -1078,40 +1084,40 @@ func SearchPolymers(ctx context.Context, constraints map[string]interface{}, mat
 
 		// Glass transition temperature (primary polymer property)
 		if minTg, ok := constraints["min_glass_transition_temp"].(float64); ok {
-			if m.GlassTransitionTemp == nil || *m.GlassTransitionTemp < minTg {
+			if m.GlassTransitionTemp != nil && *m.GlassTransitionTemp < minTg {
 				continue
 			}
 		}
 		if maxTg, ok := constraints["max_glass_transition_temp"].(float64); ok {
-			if m.GlassTransitionTemp == nil || *m.GlassTransitionTemp > maxTg {
+			if m.GlassTransitionTemp != nil && *m.GlassTransitionTemp > maxTg {
 				continue
 			}
 		}
 
 		// Heat deflection temperature (processability/service temp)
 		if minHDT, ok := constraints["min_hdt"].(float64); ok {
-			if m.HeatDeflectionTemp == nil || *m.HeatDeflectionTemp < minHDT {
+			if m.HeatDeflectionTemp != nil && *m.HeatDeflectionTemp < minHDT {
 				continue
 			}
 		}
 
 		// Processing temperature ceiling (manufacturability)
 		if maxProcTemp, ok := constraints["max_processing_temp"].(float64); ok {
-			if m.ProcessingTempMaxC == nil || *m.ProcessingTempMaxC > maxProcTemp {
+			if m.ProcessingTempMaxC != nil && *m.ProcessingTempMaxC > maxProcTemp {
 				continue
 			}
 		}
 
 		// Crystallinity check (affects stiffness and thermal properties)
 		if minCryst, ok := constraints["min_crystallinity"].(float64); ok {
-			if m.Crystallinity == nil || *m.Crystallinity < minCryst {
+			if m.Crystallinity != nil && *m.Crystallinity < minCryst {
 				continue
 			}
 		}
 
 		// Density check (lightweight requirement)
 		if maxDensity, ok := constraints["max_density"].(float64); ok {
-			if m.Density == nil || *m.Density > maxDensity {
+			if m.Density != nil && *m.Density > maxDensity {
 				continue
 			}
 		}
@@ -1160,35 +1166,35 @@ func SearchCeramics(ctx context.Context, constraints map[string]interface{}, mat
 
 		// Hardness check (primary ceramic property)
 		if minHardness, ok := constraints["min_hardness_vickers"].(float64); ok {
-			if m.HardnessVickers == nil || *m.HardnessVickers < minHardness {
+			if m.HardnessVickers != nil && *m.HardnessVickers < minHardness {
 				continue
 			}
 		}
 
 		// Fracture toughness (thermal shock resistance proxy)
 		if minToughness, ok := constraints["min_fracture_toughness"].(float64); ok {
-			if m.FractureToughness == nil || *m.FractureToughness < minToughness {
+			if m.FractureToughness != nil && *m.FractureToughness < minToughness {
 				continue
 			}
 		}
 
 		// Melting point (high-temp capability)
 		if minMeltPt, ok := constraints["min_melting_point"].(float64); ok {
-			if m.MeltingPoint == nil || *m.MeltingPoint < minMeltPt {
+			if m.MeltingPoint != nil && *m.MeltingPoint < minMeltPt {
 				continue
 			}
 		}
 
 		// Thermal conductivity (heat dissipation)
 		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok {
-			if m.ThermalConductivity == nil || *m.ThermalConductivity < minTC {
+			if m.ThermalConductivity != nil && *m.ThermalConductivity < minTC {
 				continue
 			}
 		}
 
 		// Young's modulus (stiffness)
 		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok {
-			if m.YoungsModulus == nil || *m.YoungsModulus < minModulus {
+			if m.YoungsModulus != nil && *m.YoungsModulus < minModulus {
 				continue
 			}
 		}
@@ -1237,35 +1243,35 @@ func SearchComposites(ctx context.Context, constraints map[string]interface{}, m
 
 		// Interlaminar shear strength (critical for composite integrity)
 		if minILSS, ok := constraints["min_ilss"].(float64); ok {
-			if m.InterlaminarShear == nil || *m.InterlaminarShear < minILSS {
+			if m.InterlaminarShear != nil && *m.InterlaminarShear < minILSS {
 				continue
 			}
 		}
 
 		// Fiber volume fraction (composite quality indicator)
 		if minFibreFrac, ok := constraints["min_fiber_volume_fraction"].(float64); ok {
-			if m.FiberVolumeFraction == nil || *m.FiberVolumeFraction < minFibreFrac {
+			if m.FiberVolumeFraction != nil && *m.FiberVolumeFraction < minFibreFrac {
 				continue
 			}
 		}
 
 		// Young's modulus (stiffness)
 		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok {
-			if m.YoungsModulus == nil || *m.YoungsModulus < minModulus {
+			if m.YoungsModulus != nil && *m.YoungsModulus < minModulus {
 				continue
 			}
 		}
 
 		// Density (weight constraint)
 		if maxDensity, ok := constraints["max_density"].(float64); ok {
-			if m.Density == nil || *m.Density > maxDensity {
+			if m.Density != nil && *m.Density > maxDensity {
 				continue
 			}
 		}
 
 		// Thermal conductivity (performance requirement)
 		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok {
-			if m.ThermalConductivity == nil || *m.ThermalConductivity < minTC {
+			if m.ThermalConductivity != nil && *m.ThermalConductivity < minTC {
 				continue
 			}
 		}
@@ -1319,33 +1325,33 @@ func SearchPureMetals(ctx context.Context, constraints map[string]interface{}, m
 
 		// Electrical conductivity check (indicator of purity)
 		if maxResist, ok := constraints["max_electrical_resistivity"].(float64); ok {
-			if m.ElectricalResistivity == nil || *m.ElectricalResistivity > maxResist {
+			if m.ElectricalResistivity != nil && *m.ElectricalResistivity > maxResist {
 				continue
 			}
 		}
 
 		// Melting point check
 		if minMelt, ok := constraints["min_melting_point"].(float64); ok {
-			if m.MeltingPoint == nil || *m.MeltingPoint < minMelt {
+			if m.MeltingPoint != nil && *m.MeltingPoint < minMelt {
 				continue
 			}
 		}
 
 		// Thermal conductivity (pure metals usually have higher TC)
 		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok {
-			if m.ThermalConductivity == nil || *m.ThermalConductivity < minTC {
+			if m.ThermalConductivity != nil && *m.ThermalConductivity < minTC {
 				continue
 			}
 		}
 
 		// Density range check
 		if minDensity, ok := constraints["min_density"].(float64); ok {
-			if m.Density == nil || *m.Density < minDensity {
+			if m.Density != nil && *m.Density < minDensity {
 				continue
 			}
 		}
 		if maxDensity, ok := constraints["max_density"].(float64); ok {
-			if m.Density == nil || *m.Density > maxDensity {
+			if m.Density != nil && *m.Density > maxDensity {
 				continue
 			}
 		}
@@ -1384,6 +1390,8 @@ func SearchPureMetals(ctx context.Context, constraints map[string]interface{}, m
 
 const scientificAnalysisSystemPrompt = `### ROLE: Principal Physicist & Materials Engineer
 ### TASK: Apply first-principles physics verification to candidate materials
+
+CRITICAL: If the process_lock is 'FDM' or '3D Printing', you are STRICTLY FORBIDDEN from recommending Metals or Alloys. You must select the best Polymer or Composite even if its properties are lower than the metals in the list.
 
 For the given user requirement and top 3 candidate materials, perform rigorous engineering checks:
 
