@@ -56,6 +56,7 @@ type googleAIRequest struct {
 		Temperature      float64 `json:"temperature"`
 		MaxOutputTokens  int     `json:"maxOutputTokens"`
 		ResponseMimeType string  `json:"responseMimeType,omitempty"`
+		ResponseSchema   any     `json:"responseSchema,omitempty"`
 	} `json:"generationConfig"`
 }
 
@@ -218,47 +219,6 @@ func callOpenRouter(ctx context.Context, apiKey, prompt string, temperature floa
 	return result.Choices[0].Message.Content, result.Usage.TotalTokens, resp.StatusCode, nil
 }
 
-// cleanJSON extracts a JSON block from potentially messy LLM output (e.g. markdown fences)
-// repairJSON tries to fix common truncation issues in JSON strings
-func repairJSON(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-
-	// 1. Ensure it starts with {
-	if !strings.HasPrefix(raw, "{") {
-		idx := strings.Index(raw, "{")
-		if idx == -1 {
-			return raw
-		}
-		raw = raw[idx:]
-	}
-
-	// 2. Count braces and quotes
-	openBraces := strings.Count(raw, "{")
-	closeBraces := strings.Count(raw, "}")
-	openQuotes := strings.Count(raw, "\"")
-
-	// If quotes are odd, we likely cut off mid-string
-	if openQuotes%2 != 0 {
-		raw += "\""
-	}
-
-	// Close arrays if needed
-	if strings.Count(raw, "[") > strings.Count(raw, "]") {
-		raw += "]"
-	}
-
-	// Close braces
-	for openBraces > closeBraces {
-		raw += "}"
-		closeBraces++
-	}
-
-	return raw
-}
-
 func cleanJSON(raw string) string {
 	raw = strings.TrimSpace(raw)
 	// Try to find the first '{' and last '}'
@@ -340,13 +300,12 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 		return models.IntentJSON{}, 0, fmt.Errorf("intent extraction LLM call: %w", err)
 	}
 
-	// Try to clean and repair the JSON
+	// Extract JSON object only; do not attempt truncation repair.
 	cleaned := cleanJSON(raw)
-	repaired := repairJSON(cleaned)
 
 	var llmIntent intentLLMResponse
-	if err := json.Unmarshal([]byte(repaired), &llmIntent); err != nil {
-		log.Printf("WARN: Failed to parse intent JSON: %v\nRaw: %s\nRepaired: %s", err, raw, repaired)
+	if err := json.Unmarshal([]byte(cleaned), &llmIntent); err != nil {
+		log.Printf("WARN: Failed to parse intent JSON: %v\nRaw: %s\nCleaned: %s", err, raw, cleaned)
 		// Return empty intent — search will fall back to a general query
 		return models.IntentJSON{}, tokens, nil
 	}
@@ -365,7 +324,8 @@ func ExtractIntent(ctx context.Context, query string) (models.IntentJSON, int, e
 	}
 
 	if strings.Contains(strings.ToLower(llmIntent.ProcessLock), "fdm") || strings.Contains(strings.ToLower(llmIntent.ProcessLock), "hobby") {
-		if !strings.EqualFold(intent.Category, "Composite") {
+		// Do not aggressively remap category; preserve LLM category unless absent.
+		if intent.Category == "" || strings.EqualFold(intent.Category, "null") {
 			intent.Category = "Polymer"
 		}
 		intent.Filters["melting_point"] = models.RangeFilter{Max: func() *float64 {
@@ -570,11 +530,10 @@ CATALOG (All Available Materials - pick ONLY from here):
 	}
 
 	cleaned := cleanJSON(raw)
-	repaired := repairJSON(cleaned)
 
 	var parsed LongContextLLMResponse
-	if err := json.Unmarshal([]byte(repaired), &parsed); err != nil {
-		log.Printf("WARN: LongContext JSON Parse failed: %v\nRaw: %s\nRepaired: %s", err, raw, repaired)
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		log.Printf("WARN: LongContext JSON Parse failed: %v\nRaw: %s\nCleaned: %s", err, raw, cleaned)
 		return LongContextLLMResponse{Report: "LLM responded with invalid JSON format. See logs."}, tokens, nil
 	}
 
@@ -785,10 +744,14 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 			Temperature      float64 `json:"temperature"`
 			MaxOutputTokens  int     `json:"maxOutputTokens"`
 			ResponseMimeType string  `json:"responseMimeType,omitempty"`
+			ResponseSchema   any     `json:"responseSchema,omitempty"`
 		}{
 			Temperature:      temperature,
 			MaxOutputTokens:  maxTokens,
 			ResponseMimeType: "application/json",
+			ResponseSchema: map[string]any{
+				"type": "OBJECT",
+			},
 		},
 	}
 
@@ -903,10 +866,9 @@ func RouteQuery(ctx context.Context, query string) (string, int, error) {
 	}
 
 	cleaned := cleanJSON(raw)
-	repaired := repairJSON(cleaned)
 
 	var route RouteQueryResponse
-	if err := json.Unmarshal([]byte(repaired), &route); err != nil {
+	if err := json.Unmarshal([]byte(cleaned), &route); err != nil {
 		log.Printf("WARN: Route query parsing failed: %v\nRaw: %s", err, raw)
 		fallback := InferCategoryHeuristic(query)
 		log.Printf("🎯 Heuristic fallback routing used: %s", fallback)
@@ -942,29 +904,29 @@ func SearchAlloys(ctx context.Context, constraints map[string]interface{}, mater
 		}
 
 		// Priority check: Yield strength (core alloy property)
-		if minYield, ok := constraints["min_yield_strength"].(float64); ok && m.YieldStrength != nil {
-			if *m.YieldStrength < minYield {
+		if minYield, ok := constraints["min_yield_strength"].(float64); ok {
+			if m.YieldStrength == nil || *m.YieldStrength < minYield {
 				continue
 			}
 		}
 
 		// Thermal ceiling check (processability)
-		if maxMelt, ok := constraints["max_melting_point"].(float64); ok && m.MeltingPoint != nil {
-			if *m.MeltingPoint > maxMelt {
+		if maxMelt, ok := constraints["max_melting_point"].(float64); ok {
+			if m.MeltingPoint == nil || *m.MeltingPoint > maxMelt {
 				continue
 			}
 		}
 
 		// Corrosion resistance approximation (electrical resistivity proxy)
-		if minResist, ok := constraints["min_corrosion_resistance"].(float64); ok && m.ElectricalResistivity != nil {
-			if *m.ElectricalResistivity < minResist {
+		if minResist, ok := constraints["min_corrosion_resistance"].(float64); ok {
+			if m.ElectricalResistivity == nil || *m.ElectricalResistivity < minResist {
 				continue
 			}
 		}
 
 		// Fatigue proxy: Young's modulus (higher stiffness = better fatigue resistance)
-		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok && m.YoungsModulus != nil {
-			if *m.YoungsModulus < minModulus {
+		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok {
+			if m.YoungsModulus == nil || *m.YoungsModulus < minModulus {
 				continue
 			}
 		}
@@ -1012,41 +974,41 @@ func SearchPolymers(ctx context.Context, constraints map[string]interface{}, mat
 		}
 
 		// Glass transition temperature (primary polymer property)
-		if minTg, ok := constraints["min_glass_transition_temp"].(float64); ok && m.GlassTransitionTemp != nil {
-			if *m.GlassTransitionTemp < minTg {
+		if minTg, ok := constraints["min_glass_transition_temp"].(float64); ok {
+			if m.GlassTransitionTemp == nil || *m.GlassTransitionTemp < minTg {
 				continue
 			}
 		}
-		if maxTg, ok := constraints["max_glass_transition_temp"].(float64); ok && m.GlassTransitionTemp != nil {
-			if *m.GlassTransitionTemp > maxTg {
+		if maxTg, ok := constraints["max_glass_transition_temp"].(float64); ok {
+			if m.GlassTransitionTemp == nil || *m.GlassTransitionTemp > maxTg {
 				continue
 			}
 		}
 
 		// Heat deflection temperature (processability/service temp)
-		if minHDT, ok := constraints["min_hdt"].(float64); ok && m.HeatDeflectionTemp != nil {
-			if *m.HeatDeflectionTemp < minHDT {
+		if minHDT, ok := constraints["min_hdt"].(float64); ok {
+			if m.HeatDeflectionTemp == nil || *m.HeatDeflectionTemp < minHDT {
 				continue
 			}
 		}
 
 		// Processing temperature ceiling (manufacturability)
-		if maxProcTemp, ok := constraints["max_processing_temp"].(float64); ok && m.ProcessingTempMaxC != nil {
-			if *m.ProcessingTempMaxC > maxProcTemp {
+		if maxProcTemp, ok := constraints["max_processing_temp"].(float64); ok {
+			if m.ProcessingTempMaxC == nil || *m.ProcessingTempMaxC > maxProcTemp {
 				continue
 			}
 		}
 
 		// Crystallinity check (affects stiffness and thermal properties)
-		if minCryst, ok := constraints["min_crystallinity"].(float64); ok && m.Crystallinity != nil {
-			if *m.Crystallinity < minCryst {
+		if minCryst, ok := constraints["min_crystallinity"].(float64); ok {
+			if m.Crystallinity == nil || *m.Crystallinity < minCryst {
 				continue
 			}
 		}
 
 		// Density check (lightweight requirement)
-		if maxDensity, ok := constraints["max_density"].(float64); ok && m.Density != nil {
-			if *m.Density > maxDensity {
+		if maxDensity, ok := constraints["max_density"].(float64); ok {
+			if m.Density == nil || *m.Density > maxDensity {
 				continue
 			}
 		}
@@ -1094,36 +1056,36 @@ func SearchCeramics(ctx context.Context, constraints map[string]interface{}, mat
 		}
 
 		// Hardness check (primary ceramic property)
-		if minHardness, ok := constraints["min_hardness_vickers"].(float64); ok && m.HardnessVickers != nil {
-			if *m.HardnessVickers < minHardness {
+		if minHardness, ok := constraints["min_hardness_vickers"].(float64); ok {
+			if m.HardnessVickers == nil || *m.HardnessVickers < minHardness {
 				continue
 			}
 		}
 
 		// Fracture toughness (thermal shock resistance proxy)
-		if minToughness, ok := constraints["min_fracture_toughness"].(float64); ok && m.FractureToughness != nil {
-			if *m.FractureToughness < minToughness {
+		if minToughness, ok := constraints["min_fracture_toughness"].(float64); ok {
+			if m.FractureToughness == nil || *m.FractureToughness < minToughness {
 				continue
 			}
 		}
 
 		// Melting point (high-temp capability)
-		if minMeltPt, ok := constraints["min_melting_point"].(float64); ok && m.MeltingPoint != nil {
-			if *m.MeltingPoint < minMeltPt {
+		if minMeltPt, ok := constraints["min_melting_point"].(float64); ok {
+			if m.MeltingPoint == nil || *m.MeltingPoint < minMeltPt {
 				continue
 			}
 		}
 
 		// Thermal conductivity (heat dissipation)
-		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok && m.ThermalConductivity != nil {
-			if *m.ThermalConductivity < minTC {
+		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok {
+			if m.ThermalConductivity == nil || *m.ThermalConductivity < minTC {
 				continue
 			}
 		}
 
 		// Young's modulus (stiffness)
-		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok && m.YoungsModulus != nil {
-			if *m.YoungsModulus < minModulus {
+		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok {
+			if m.YoungsModulus == nil || *m.YoungsModulus < minModulus {
 				continue
 			}
 		}
@@ -1171,36 +1133,36 @@ func SearchComposites(ctx context.Context, constraints map[string]interface{}, m
 		}
 
 		// Interlaminar shear strength (critical for composite integrity)
-		if minILSS, ok := constraints["min_ilss"].(float64); ok && m.InterlaminarShear != nil {
-			if *m.InterlaminarShear < minILSS {
+		if minILSS, ok := constraints["min_ilss"].(float64); ok {
+			if m.InterlaminarShear == nil || *m.InterlaminarShear < minILSS {
 				continue
 			}
 		}
 
 		// Fiber volume fraction (composite quality indicator)
-		if minFibreFrac, ok := constraints["min_fiber_volume_fraction"].(float64); ok && m.FiberVolumeFraction != nil {
-			if *m.FiberVolumeFraction < minFibreFrac {
+		if minFibreFrac, ok := constraints["min_fiber_volume_fraction"].(float64); ok {
+			if m.FiberVolumeFraction == nil || *m.FiberVolumeFraction < minFibreFrac {
 				continue
 			}
 		}
 
 		// Young's modulus (stiffness)
-		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok && m.YoungsModulus != nil {
-			if *m.YoungsModulus < minModulus {
+		if minModulus, ok := constraints["min_youngs_modulus"].(float64); ok {
+			if m.YoungsModulus == nil || *m.YoungsModulus < minModulus {
 				continue
 			}
 		}
 
 		// Density (weight constraint)
-		if maxDensity, ok := constraints["max_density"].(float64); ok && m.Density != nil {
-			if *m.Density > maxDensity {
+		if maxDensity, ok := constraints["max_density"].(float64); ok {
+			if m.Density == nil || *m.Density > maxDensity {
 				continue
 			}
 		}
 
 		// Thermal conductivity (performance requirement)
-		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok && m.ThermalConductivity != nil {
-			if *m.ThermalConductivity < minTC {
+		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok {
+			if m.ThermalConductivity == nil || *m.ThermalConductivity < minTC {
 				continue
 			}
 		}
@@ -1253,34 +1215,34 @@ func SearchPureMetals(ctx context.Context, constraints map[string]interface{}, m
 		}
 
 		// Electrical conductivity check (indicator of purity)
-		if maxResist, ok := constraints["max_electrical_resistivity"].(float64); ok && m.ElectricalResistivity != nil {
-			if *m.ElectricalResistivity > maxResist {
+		if maxResist, ok := constraints["max_electrical_resistivity"].(float64); ok {
+			if m.ElectricalResistivity == nil || *m.ElectricalResistivity > maxResist {
 				continue
 			}
 		}
 
 		// Melting point check
-		if minMelt, ok := constraints["min_melting_point"].(float64); ok && m.MeltingPoint != nil {
-			if *m.MeltingPoint < minMelt {
+		if minMelt, ok := constraints["min_melting_point"].(float64); ok {
+			if m.MeltingPoint == nil || *m.MeltingPoint < minMelt {
 				continue
 			}
 		}
 
 		// Thermal conductivity (pure metals usually have higher TC)
-		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok && m.ThermalConductivity != nil {
-			if *m.ThermalConductivity < minTC {
+		if minTC, ok := constraints["min_thermal_conductivity"].(float64); ok {
+			if m.ThermalConductivity == nil || *m.ThermalConductivity < minTC {
 				continue
 			}
 		}
 
 		// Density range check
-		if minDensity, ok := constraints["min_density"].(float64); ok && m.Density != nil {
-			if *m.Density < minDensity {
+		if minDensity, ok := constraints["min_density"].(float64); ok {
+			if m.Density == nil || *m.Density < minDensity {
 				continue
 			}
 		}
-		if maxDensity, ok := constraints["max_density"].(float64); ok && m.Density != nil {
-			if *m.Density > maxDensity {
+		if maxDensity, ok := constraints["max_density"].(float64); ok {
+			if m.Density == nil || *m.Density > maxDensity {
 				continue
 			}
 		}
@@ -1438,10 +1400,9 @@ Please analyze these candidates using first-principles physics and provide compr
 	}
 
 	cleaned := cleanJSON(raw)
-	repaired := repairJSON(cleaned)
 
 	var analysis ScientificAnalysisResponse
-	if err := json.Unmarshal([]byte(repaired), &analysis); err != nil {
+	if err := json.Unmarshal([]byte(cleaned), &analysis); err != nil {
 		log.Printf("WARN: Scientific analysis JSON parse failed: %v\nRaw: %s", err, raw)
 		// Return partial response with top candidate name
 		analysis.TopCandidate = topCandidates[0].Name
