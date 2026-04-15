@@ -2,7 +2,6 @@ import React, { useState, useCallback, useEffect } from 'react'
 import './styles/index.css'
 import { QueryInput }    from './components/QueryInput'
 import { ReportCard }    from './components/ReportCard'
-import { PredictorPanel } from './components/PredictorPanel'
 import { RecommendResponse, ping } from './api/client'
 
 const App: React.FC = () => {
@@ -109,7 +108,7 @@ const App: React.FC = () => {
               ['🧠', 'Gemini Intent Extraction'],
               ['🗄️', 'Local PostgreSQL RAG'],
               ['📋', 'Virtual Scientist Report'],
-              ['🔬', 'LLM Alloy Predictor'],
+              ['⚗️', 'Backend-Driven Alloy Prediction'],
             ].map(([icon, label]) => (
               <div key={label as string} style={{
                 display: 'flex', alignItems: 'center', gap: 8,
@@ -159,18 +158,6 @@ const App: React.FC = () => {
               </div>
             </div>
           )}
-
-          <div style={{ marginTop: 36 }}>
-            <div className="card" style={{ marginBottom: 16, padding: '16px 20px' }}>
-              <h3 style={{ fontSize: '1rem', marginBottom: 4 }}>
-                Alloy Prediction (Inside Recommendation Workflow)
-              </h3>
-              <p className="text-sm text-muted">
-                If you want to test a custom composition before selecting a material route, run a direct alloy prediction here.
-              </p>
-            </div>
-            <PredictorPanel />
-          </div>
         </div>
       </div>
 

@@ -20,6 +20,7 @@ type DispatcherResponse struct {
 	RoutedCategory      string            `json:"routed_category"`
 	CategoryCandidates  []models.Material `json:"category_candidates"`
 	PhysicsAnalysis     interface{}       `json:"physics_analysis"`
+	AlloyPrediction     interface{}       `json:"alloy_prediction,omitempty"`
 	TopRecommendation   models.Material   `json:"top_recommendation"`
 	AlternativeOptions  []models.Material `json:"alternative_options"`
 	TotalTokensUsed     int               `json:"total_tokens_used"`
@@ -298,12 +299,25 @@ func RecommendWithDispatcher(c *gin.Context) {
 		pipelineSteps = append(pipelineSteps, "✅ Top recommendation: "+topRecommendation.Name)
 	}
 
+	var alloyPrediction interface{}
+	if topRecommendation.ID != 0 && services.ShouldAttachInlineAlloyPrediction(req.Query, routedCategory, topRecommendation) {
+		prediction, predictionTokens, predErr := services.GenerateInlineAlloyPrediction(ctx, req.Query, topRecommendation)
+		totalTokensUsed += predictionTokens
+		if predErr != nil {
+			log.Printf("⚠️  Inline alloy prediction failed: %v", predErr)
+		} else {
+			alloyPrediction = prediction
+			pipelineSteps = append(pipelineSteps, "🧠 Inline alloy prediction added")
+		}
+	}
+
 	// ── Return Enhanced Response ────────────────────────────────────────────
 	resp := DispatcherResponse{
 		Query:               req.Query,
 		RoutedCategory:      routedCategory,
 		CategoryCandidates:  candidates,
 		PhysicsAnalysis:     analysis,
+		AlloyPrediction:     alloyPrediction,
 		TopRecommendation:   topRecommendation,
 		AlternativeOptions:  alternatives,
 		TotalTokensUsed:     totalTokensUsed,

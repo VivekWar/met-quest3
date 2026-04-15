@@ -2524,3 +2524,144 @@ func deterministicGuardrailExplanation(query string, m models.Material) string {
 		return name + " is the highest-ranked candidate after physics and manufacturing feasibility guardrails."
 	}
 }
+
+type InlineAlloyPrediction struct {
+	Summary       string            `json:"summary"`
+	KeyFindings   map[string]string `json:"key_findings,omitempty"`
+	RiskFlags     []string          `json:"risk_flags,omitempty"`
+	Confidence    string            `json:"confidence,omitempty"`
+	ShouldDisplay bool              `json:"should_display"`
+}
+
+func ShouldAttachInlineAlloyPrediction(query string, routedCategory string, top models.Material) bool {
+	if top.ID == 0 {
+		return false
+	}
+	if routedCategory != "Alloys" && routedCategory != "Pure_Metals" {
+		return false
+	}
+	s := extractQuerySignals(query)
+	q := strings.ToLower(query)
+	return s.hasServiceTemp || s.hasHighPressure || s.requiresCryogenic || s.hasHighStrengthReq || s.requiresAerospace || strings.Contains(q, "fatigue") || strings.Contains(q, "structural")
+}
+
+func GenerateInlineAlloyPrediction(ctx context.Context, query string, top models.Material) (InlineAlloyPrediction, int, error) {
+	base := InlineAlloyPrediction{
+		Summary:       buildDeterministicPredictionSummary(query, top),
+		KeyFindings:   deterministicPredictionFindings(top),
+		RiskFlags:     deterministicPredictionRisks(query, top),
+		Confidence:    "Medium",
+		ShouldDisplay: true,
+	}
+
+	if os.Getenv("ENABLE_LLM_INLINE_PREDICTION") != "1" {
+		return base, 0, nil
+	}
+
+	type llmInlinePrediction struct {
+		Summary     string            `json:"summary"`
+		KeyFindings map[string]string `json:"key_findings"`
+		RiskFlags   []string          `json:"risk_flags"`
+		Confidence  string            `json:"confidence"`
+	}
+
+	prompt := fmt.Sprintf(`You are a materials scientist. Create a short prediction note for the selected alloy.
+
+User query:
+"%s"
+
+Selected material:
+- Name: %s
+- Density: %s g/cm3
+- Yield strength: %s MPa
+- Thermal conductivity: %s W/mK
+- Melting point: %s K
+
+Return strict JSON:
+{
+  "summary": "1-2 sentence practical prediction",
+  "key_findings": {"field": "value"},
+  "risk_flags": ["short risk", "short risk"],
+  "confidence": "High|Medium|Low"
+}
+`, query, top.Name, fmtOpt(top.Density), fmtOpt(top.YieldStrength), fmtOpt(top.ThermalConductivity), fmtOpt(top.MeltingPoint))
+
+	raw, tokens, err := callGemini(ctx, prompt, 0.1, 350)
+	if err != nil {
+		return base, 0, nil
+	}
+
+	cleaned := cleanJSON(raw)
+	var parsed llmInlinePrediction
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		return base, tokens, nil
+	}
+
+	if strings.TrimSpace(parsed.Summary) != "" {
+		base.Summary = parsed.Summary
+	}
+	if len(parsed.KeyFindings) > 0 {
+		base.KeyFindings = parsed.KeyFindings
+	}
+	if len(parsed.RiskFlags) > 0 {
+		base.RiskFlags = parsed.RiskFlags
+	}
+	if strings.TrimSpace(parsed.Confidence) != "" {
+		base.Confidence = parsed.Confidence
+	}
+
+	return base, tokens, nil
+}
+
+func buildDeterministicPredictionSummary(query string, top models.Material) string {
+	s := extractQuerySignals(query)
+	if s.requiresCryogenic {
+		return top.Name + " is predicted to remain a practical choice under low-temperature service, provided machining quality and sealing are controlled."
+	}
+	if s.hasServiceTemp {
+		return fmt.Sprintf("%s is predicted to handle the requested operating window with normal engineering safety factors and process control.", top.Name)
+	}
+	return top.Name + " is predicted to provide stable performance for this application, with the main risk driven by manufacturing quality rather than base material limits."
+}
+
+func deterministicPredictionFindings(top models.Material) map[string]string {
+	f := map[string]string{}
+	if top.YieldStrength != nil {
+		f["Yield strength"] = fmt.Sprintf("%.1f MPa", *top.YieldStrength)
+	}
+	if top.Density != nil {
+		f["Density"] = fmt.Sprintf("%.2f g/cm3", *top.Density)
+	}
+	if top.MeltingPoint != nil {
+		f["Melting point"] = fmt.Sprintf("%.0f K", *top.MeltingPoint)
+	}
+	if top.ThermalConductivity != nil {
+		f["Thermal conductivity"] = fmt.Sprintf("%.2f W/mK", *top.ThermalConductivity)
+	}
+	return f
+}
+
+func deterministicPredictionRisks(query string, top models.Material) []string {
+	r := []string{}
+	s := extractQuerySignals(query)
+	if s.hasHighPressure {
+		r = append(r, "Pressure-tight performance still depends on machining tolerance and sealing quality.")
+	}
+	if s.hasServiceTemp && top.MeltingPoint == nil {
+		r = append(r, "Missing melting-point data in catalog; validate with supplier datasheet before final sign-off.")
+	}
+	if top.YieldStrength == nil {
+		r = append(r, "Yield strength is missing in the dataset; perform final verification against certified grade data.")
+	}
+	if len(r) == 0 {
+		r = append(r, "Validate fatigue and joining process in prototype tests before production freeze.")
+	}
+	return r
+}
+
+func fmtOpt(v *float64) string {
+	if v == nil {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.3g", *v)
+}

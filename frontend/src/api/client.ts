@@ -53,8 +53,17 @@ export interface RecommendResponse {
   final_recommendation?: Material
   top_recommendations?: Material[]
   routed_category?: string
+  inline_alloy_prediction?: InlineAlloyPrediction
   report: string
   tokens_used: number
+}
+
+export interface InlineAlloyPrediction {
+  summary: string
+  key_findings?: Record<string, string>
+  risk_flags?: string[]
+  confidence?: string
+  should_display: boolean
 }
 
 interface DispatcherPhysicsAnalysis {
@@ -71,6 +80,7 @@ interface DispatcherResponse {
   routed_category: string
   category_candidates: Material[]
   physics_analysis?: DispatcherPhysicsAnalysis
+  alloy_prediction?: InlineAlloyPrediction
   top_recommendation?: Material
   alternative_options?: Material[]
   total_tokens_used: number
@@ -156,6 +166,24 @@ function buildDispatcherReport(data: DispatcherResponse): string {
     steps.forEach((step, idx) => parts.push(`${idx + 1}. ${step}`))
   }
 
+  if (data.alloy_prediction?.should_display) {
+    parts.push('')
+    parts.push('## AI Alloy Performance Prediction')
+    parts.push(data.alloy_prediction.summary)
+    if (data.alloy_prediction.key_findings && Object.keys(data.alloy_prediction.key_findings).length > 0) {
+      parts.push('')
+      parts.push('Key predicted findings:')
+      Object.entries(data.alloy_prediction.key_findings).forEach(([k, v]) => {
+        parts.push(`- ${k}: ${v}`)
+      })
+    }
+    if (data.alloy_prediction.risk_flags && data.alloy_prediction.risk_flags.length > 0) {
+      parts.push('')
+      parts.push('Prediction risk flags:')
+      data.alloy_prediction.risk_flags.forEach((item) => parts.push(`- ${item}`))
+    }
+  }
+
   return parts.join('\n')
 }
 
@@ -180,14 +208,10 @@ export async function recommend(query: string, domain: string): Promise<Recommen
     final_recommendation: top && top.id ? top : topRecommendations[0],
     top_recommendations: topRecommendations,
     routed_category: data.routed_category,
+    inline_alloy_prediction: data.alloy_prediction,
     report: buildDispatcherReport(data),
     tokens_used: data.total_tokens_used || 0,
   }
-}
-
-export async function predict(composition: Record<string, number>): Promise<PredictResponse> {
-  const { data } = await api.post<PredictResponse>('/predict', { composition })
-  return data
 }
 
 export async function ping(): Promise<void> {

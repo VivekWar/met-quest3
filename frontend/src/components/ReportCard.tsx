@@ -53,6 +53,7 @@ export const ReportCard: React.FC<Props> = ({ result }) => {
   const hasFilters = Object.keys(result.extracted_intent.filters || {}).length > 0
   const finalRecommendation = result.final_recommendation || result.recommendations[0]
   const topThree = (result.top_recommendations || result.recommendations).slice(0, 3)
+  const inlinePrediction = result.inline_alloy_prediction
 
   return (
     <div className="fade-in-up" id="report-section">
@@ -125,6 +126,38 @@ export const ReportCard: React.FC<Props> = ({ result }) => {
               <div className="text-xs text-muted">{mat.category}{mat.subcategory ? ` • ${mat.subcategory}` : ''}</div>
             </div>
           ))}
+        </div>
+      )}
+
+      {inlinePrediction?.should_display && (
+        <div className="card card--accent" style={{ marginBottom: 20, padding: '18px 20px' }}>
+          <div className="text-xs text-muted" style={{ letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+            AI Alloy Prediction
+          </div>
+          <p className="text-sm" style={{ color: 'var(--color-text-muted)', marginBottom: 10 }}>
+            {inlinePrediction.summary}
+          </p>
+
+          {inlinePrediction.key_findings && Object.keys(inlinePrediction.key_findings).length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              {Object.entries(inlinePrediction.key_findings).map(([k, v]) => (
+                <div key={k} className="text-xs" style={{ color: 'var(--color-text-muted)', marginBottom: 4 }}>
+                  <strong style={{ color: 'var(--color-text)' }}>{k}:</strong> {v}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {inlinePrediction.risk_flags && inlinePrediction.risk_flags.length > 0 && (
+            <div>
+              <div className="text-xs" style={{ color: 'var(--color-warning)', marginBottom: 4 }}>Watch-outs:</div>
+              {inlinePrediction.risk_flags.slice(0, 3).map((risk, idx) => (
+                <div key={idx} className="text-xs" style={{ color: 'var(--color-text-muted)', marginBottom: 2 }}>
+                  - {risk}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
