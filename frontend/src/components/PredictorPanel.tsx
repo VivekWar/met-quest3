@@ -105,7 +105,7 @@ export const PredictorPanel: React.FC = () => {
         {/* Element rows */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {elements.map((el, idx) => (
-            <div key={idx} className="flex items-center gap-md" id={`element-row-${idx}`}>
+            <div key={idx} className="flex items-center gap-md predictor-row" id={`element-row-${idx}`}>
               <div
                 className="font-mono"
                 style={{
@@ -190,7 +190,7 @@ export const PredictorPanel: React.FC = () => {
             >{sym}</button>
           ))}
         </div>
-        <div className="flex gap-sm">
+        <div className="flex gap-sm predictor-add-row">
           <input
             className="input"
             style={{ flex: 1 }}

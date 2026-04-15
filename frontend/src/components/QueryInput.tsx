@@ -6,14 +6,6 @@ interface Props {
   onLoading: (loading: boolean) => void
 }
 
-const EXAMPLE_QUERIES = [
-  "Lightweight material for an aerospace bracket — needs high strength and operates at temperatures up to 800°C",
-  "Need a biocompatible material for a surgical implant — corrosion resistant and strong",
-  "Best thermal conductor for a heat sink that also needs to be electrically insulating",
-  "Refractory material for a rocket nozzle liner — must survive 3000K",
-  "High electrical conductivity for busbars but density must be under 5 g/cm³",
-]
-
 export const DOMAINS = [
   "Overall (Top 1000)",
   "Aerospace & Aviation",
@@ -61,12 +53,6 @@ export const QueryInput: React.FC<Props> = ({ onResult, onLoading }) => {
     }
   }, [query, domain, loading, onResult, onLoading])
 
-  const handleExample = useCallback((example: string) => {
-    setQuery(example)
-    setCharCount(example.length)
-    setError(null)
-  }, [])
-
   return (
     <div className="card fade-in-up" id="query-panel">
       {/* Header */}
@@ -106,26 +92,8 @@ export const QueryInput: React.FC<Props> = ({ onResult, onLoading }) => {
           )}
         </div>
 
-        <div className="flex items-center justify-between mt-md">
-          <div className="flex gap-sm" style={{ flexWrap: 'wrap' }}>
-            {/* Example chips */}
-            <span className="text-xs text-dim" style={{ alignSelf: 'center' }}>Try:</span>
-            {['Aerospace', 'Biomedical', 'Thermal', 'Refractory', 'Electrical'].map((label, i) => (
-              <button
-                key={label}
-                type="button"
-                className="btn btn--outline btn--sm"
-                onClick={() => handleExample(EXAMPLE_QUERIES[i])}
-                disabled={loading}
-                id={`example-${label.toLowerCase()}`}
-                style={{ padding: '4px 12px', fontSize: '0.75rem' }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', gap: '12px' }}>
+        <div className="flex items-center justify-end mt-md query-actions">
+          <div className="query-controls" style={{ display: 'flex', gap: '12px' }}>
             <select
               value={domain}
               onChange={(e) => setDomain(e.target.value)}

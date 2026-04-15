@@ -51,6 +51,8 @@ export const ReportCard: React.FC<Props> = ({ result }) => {
   const [showIntent, setShowIntent] = useState(false)
 
   const hasFilters = Object.keys(result.extracted_intent.filters || {}).length > 0
+  const finalRecommendation = result.final_recommendation || result.recommendations[0]
+  const topThree = (result.top_recommendations || result.recommendations).slice(0, 3)
 
   return (
     <div className="fade-in-up" id="report-section">
@@ -95,6 +97,36 @@ export const ReportCard: React.FC<Props> = ({ result }) => {
           </div>
         )}
       </div>
+
+      {/* Final Recommendation Highlight */}
+      {finalRecommendation && (
+        <div className="card card--success" style={{ marginBottom: 20, padding: '20px 24px' }}>
+          <div className="text-xs text-muted" style={{ letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+            Final Recommendation
+          </div>
+          <h3 style={{ marginBottom: 6, color: 'var(--color-success)' }}>{finalRecommendation.name}</h3>
+          <p className="text-sm text-muted">
+            This candidate scored highest after process feasibility checks, physics constraints, and category routing.
+          </p>
+        </div>
+      )}
+
+      {/* Top 3 Recommendations */}
+      {topThree.length > 0 && (
+        <div className="recommendation-grid" style={{ marginBottom: 20 }}>
+          {topThree.map((mat, idx) => (
+            <div
+              key={mat.id}
+              className={`card ${idx === 0 ? 'card--accent' : ''}`}
+              style={{ padding: '16px 18px' }}
+            >
+              <div className="text-xs text-dim" style={{ marginBottom: 6 }}>Rank #{idx + 1}</div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>{mat.name}</div>
+              <div className="text-xs text-muted">{mat.category}{mat.subcategory ? ` • ${mat.subcategory}` : ''}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Main report */}
       <div className="card">

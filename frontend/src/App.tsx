@@ -2,14 +2,10 @@ import React, { useState, useCallback, useEffect } from 'react'
 import './styles/index.css'
 import { QueryInput }    from './components/QueryInput'
 import { ReportCard }    from './components/ReportCard'
-import { PropertyTable } from './components/PropertyTable'
 import { PredictorPanel } from './components/PredictorPanel'
 import { RecommendResponse, ping } from './api/client'
 
-type Tab = 'recommend' | 'predict'
-
 const App: React.FC = () => {
-  const [activeTab, setActiveTab]       = useState<Tab>('recommend')
   const [result, setResult]             = useState<RecommendResponse | null>(null)
   const [loading, setLoading]           = useState(false)
 
@@ -55,26 +51,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Tabs */}
-          <div className="nav-tabs" style={{ display: 'flex', gap: 4, flex: 1 }}>
-            {([
-              { key: 'recommend', label: 'Material Recommender', id: 'tab-recommend' },
-              { key: 'predict',   label: 'Alloy Predictor',      id: 'tab-predict'   },
-            ] as const).map(tab => (
-              <button
-                key={tab.key}
-                id={tab.id}
-                className="btn btn--sm"
-                onClick={() => setActiveTab(tab.key)}
-                style={{
-                  background: activeTab === tab.key ? 'rgba(0,212,255,0.12)' : 'transparent',
-                  color: activeTab === tab.key ? 'var(--color-primary)' : 'var(--color-text-muted)',
-                  border: `1px solid ${activeTab === tab.key ? 'rgba(0,212,255,0.3)' : 'transparent'}`,
-                  fontSize: '0.85rem',
-                }}
-              >{tab.label}</button>
-            ))}
-          </div>
+          <div style={{ flex: 1 }} />
 
           {/* DB badge */}
           <div className="nav-badge" style={{
@@ -97,7 +74,7 @@ const App: React.FC = () => {
       </nav>
 
       {/* ── Hero ────────────────────────────────────────────────── */}
-      {activeTab === 'recommend' && !result && (
+      {!result && (
         <div style={{
           textAlign: 'center', padding: '72px 24px 48px',
           background: 'radial-gradient(ellipse at 50% 0%, rgba(0,212,255,0.07) 0%, transparent 65%)',
@@ -152,61 +129,49 @@ const App: React.FC = () => {
 
       {/* ── Main Content ─────────────────────────────────────────── */}
       <div className="container" style={{ paddingBottom: 64 }}>
-
-        {/* Recommend Tab */}
-        {activeTab === 'recommend' && (
-          <div style={{ maxWidth: 900, margin: '0 auto' }}>
-            <div style={{ marginBottom: 24 }}>
-              <QueryInput onResult={handleResult} onLoading={setLoading} />
-            </div>
-
-            {/* Loading skeleton */}
-            {loading && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {[160, 300, 80].map((h, i) => (
-                  <div key={i} className="skeleton" style={{ height: h, borderRadius: 18 }} />
-                ))}
-              </div>
-            )}
-
-            {/* Results */}
-            {result && !loading && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-                <ReportCard result={result} />
-                {result.recommendations.length > 0 && (
-                  <PropertyTable materials={result.recommendations} />
-                )}
-
-                {/* New search CTA */}
-                <div style={{ textAlign: 'center' }}>
-                  <button
-                    className="btn btn--outline"
-                    onClick={() => setResult(null)}
-                    id="new-search-btn"
-                  >
-                    ← New Search
-                  </button>
-                </div>
-              </div>
-            )}
+        <div style={{ maxWidth: 900, margin: '0 auto' }}>
+          <div style={{ marginBottom: 24 }}>
+            <QueryInput onResult={handleResult} onLoading={setLoading} />
           </div>
-        )}
 
-        {/* Predict Tab */}
-        {activeTab === 'predict' && (
-          <div style={{ maxWidth: 800, margin: '0 auto' }}>
-            <div style={{ marginBottom: 32, textAlign: 'center', padding: '32px 0 16px' }}>
-              <h1 style={{ fontSize: '1.75rem', marginBottom: 8 }}>
-                <span className="gradient-text">LLM-Enhanced</span> Alloy Predictor
-              </h1>
-              <p className="text-muted">
-                Define a custom alloy composition. Phase 1 computes rule-of-mixtures from our DB.
-                Phase 2 sends it to Gemini for thermodynamic refinement with phase diagram knowledge.
+          {/* Loading skeleton */}
+          {loading && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {[160, 300, 80].map((h, i) => (
+                <div key={i} className="skeleton" style={{ height: h, borderRadius: 18 }} />
+              ))}
+            </div>
+          )}
+
+          {/* Results */}
+          {result && !loading && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+              <ReportCard result={result} />
+
+              <div style={{ textAlign: 'center' }}>
+                <button
+                  className="btn btn--outline"
+                  onClick={() => setResult(null)}
+                  id="new-search-btn"
+                >
+                  ← New Search
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 36 }}>
+            <div className="card" style={{ marginBottom: 16, padding: '16px 20px' }}>
+              <h3 style={{ fontSize: '1rem', marginBottom: 4 }}>
+                Alloy Prediction (Inside Recommendation Workflow)
+              </h3>
+              <p className="text-sm text-muted">
+                If you want to test a custom composition before selecting a material route, run a direct alloy prediction here.
               </p>
             </div>
             <PredictorPanel />
           </div>
-        )}
+        </div>
       </div>
 
       {/* ── Footer ──────────────────────────────────────────────── */}

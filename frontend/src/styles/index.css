@@ -103,8 +103,15 @@ a:hover { text-decoration: underline; }
   gap: 24px;
 }
 
+.recommendation-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
 @media (max-width: 768px) {
   .grid-2 { grid-template-columns: 1fr; }
+  .recommendation-grid { grid-template-columns: 1fr; }
   h1 { font-size: 2rem; }
 }
 
