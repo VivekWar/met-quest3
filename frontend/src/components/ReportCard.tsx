@@ -62,6 +62,7 @@ export const ReportCard: React.FC<Props> = ({ result }) => {
         padding: '20px 24px',
         marginBottom: 20,
         display: 'flex',
+        flexWrap: 'wrap',
         alignItems: 'center',
         gap: 16,
       }}>
@@ -86,7 +87,7 @@ export const ReportCard: React.FC<Props> = ({ result }) => {
           </p>
         </div>
         {result.tokens_used > 0 && (
-          <div style={{ marginLeft: 'auto', textAlign: 'right', flexShrink: 0 }}>
+          <div className="report-tokens" style={{ marginLeft: 'auto', textAlign: 'right', flexShrink: 0 }}>
             <div className="text-xs text-dim">Tokens used</div>
             <div className="font-mono" style={{ color: 'var(--color-accent)', fontSize: '0.9rem' }}>
               {result.tokens_used.toLocaleString()}

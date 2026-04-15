@@ -7,6 +7,8 @@ Polypropylene PP,(C3H6)n,Polymer,Thermoplastic,0.9,0.22,30.0,35.0,1.4,,100.0,100
 Ultem PEI,(C37H24N2O6)n,Polymer,Thermoplastic,1.27,0.22,105.0,105.0,3.3,,56.0,1000000000000000.0,,Curated,,490.15,473.15,340.0,390.0,0.0
 PLA,C3H4O2,Polymer,Thermoplastic,1.24,0.16,40.0,50.0,2.7,,68.0,,,CSV,,333.15,328.15,463.15,220.0,10.0
 PETG,C3H4O2,Polymer,Thermoplastic,1.27,0.19,35.0,60.0,2.1,,71.0,,,CSV,,353.15,343.15,230.0,260.0,0.0
+TPU Elastomer,(C10H8N2O2)n,Polymer,Elastomer,1.2,0.2,28.0,45.0,0.06,,160.0,10000000000000.0,,Curated,,243.15,323.15,210.0,240.0,0.0
+PC-PBT Blend,(C15H16O2)n-(C12H12O4)n,Polymer,Engineering Blend,1.21,0.22,58.0,72.0,2.3,,68.0,100000000000000.0,,Curated,,393.15,378.15,255.0,295.0,15.0
 ABS,C4H6N,Polymer,Thermoplastic,1.05,0.22,25.0,70.0,2.3,,105.0,,,CSV,,378.15,368.15,230.0,260.0,0.0
 Polystyrene PS,C8H8,Polymer,Thermoplastic,1.05,0.13,35.0,50.0,3.3,,103.0,,,CSV,,373.15,363.15,200.0,240.0,0.0
 PET Polyester,C10H8O4,Polymer,Thermoplastic,1.38,0.3,50.0,80.0,2.7,,108.0,,,CSV,,342.15,353.15,250.0,290.0,20.0

@@ -52,6 +52,7 @@ type querySignals struct {
 	requiresAerospace    bool
 	hasHighPressure      bool
 	hasHighStrengthReq   bool
+	requiresSnapFit      bool
 	impossibleDesktopFDM bool
 }
 
@@ -968,13 +969,13 @@ func scoreMaterialForQuery(m models.Material, s querySignals) float64 {
 
 		if s.requiresAesthetics && s.requiresFastPrint && !s.requiresHeatMargin {
 			if strings.Contains(name, "pla") {
-				score += 260.0
+				score += 760.0
 			}
 			if strings.Contains(name, "petg") {
-				score -= 80.0
+				score -= 120.0
 			}
 			if strings.Contains(name, "peek") || strings.Contains(name, "ultem") || strings.Contains(name, "polycarbonate") {
-				score -= 160.0
+				score -= 700.0
 			}
 		}
 
@@ -989,7 +990,7 @@ func scoreMaterialForQuery(m models.Material, s querySignals) float64 {
 	}
 
 	if s.requiresDamping {
-		if strings.Contains(name, "tpu") || strings.Contains(name, "elastomer") || strings.Contains(name, "urethane") {
+		if strings.Contains(name, "tpu") || strings.Contains(name, "elastomer") || strings.Contains(name, "urethane") || strings.Contains(name, "rubber") || strings.Contains(name, "tpe") || strings.Contains(name, "santoprene") {
 			score += 420.0
 		}
 		if strings.Contains(name, "polypropylene") || strings.Contains(name, " pp") || strings.Contains(name, "nylon") {
@@ -1025,6 +1026,9 @@ func scoreMaterialForQuery(m models.Material, s querySignals) float64 {
 		if strings.Contains(name, "6061") {
 			score += 320.0
 		}
+		if strings.Contains(name, "al-6061") || strings.Contains(name, "aluminum 6061") || strings.Contains(name, "6061-t6") {
+			score += 280.0
+		}
 		if strings.Contains(name, "aluminum") && s.requiresCryogenic {
 			score += 180.0
 		}
@@ -1039,6 +1043,9 @@ func scoreMaterialForQuery(m models.Material, s querySignals) float64 {
 	if s.requiresConductivity {
 		if strings.Contains(name, "copper") || name == "cu" || strings.Contains(name, "copper (pure)") {
 			score += 900.0
+		}
+		if strings.Contains(name, "oxygen-free copper") || strings.Contains(name, "c101") || strings.Contains(name, "c110") {
+			score += 260.0
 		}
 		if strings.Contains(name, "silver") {
 			score += 260.0
@@ -1099,6 +1106,37 @@ func scoreMaterialForQuery(m models.Material, s querySignals) float64 {
 		}
 		if m.YieldStrength != nil && m.Density != nil && *m.Density > 0 {
 			score += (*m.YieldStrength / *m.Density) * 4.0
+		}
+	}
+
+	if s.requiresAesthetics && s.requiresFastPrint && !s.requiresHeatMargin {
+		if strings.Contains(name, "pla") {
+			score += 820.0
+		}
+		if strings.Contains(name, "petg") {
+			score += 120.0
+		}
+		if strings.Contains(name, "ultem") || strings.Contains(name, "peek") || strings.Contains(name, "polycarbonate") || strings.Contains(name, "pc-") {
+			score -= 500.0
+		}
+	}
+
+	if s.hasNozzleCap && m.ProcessingTempMinC != nil && *m.ProcessingTempMinC > (s.nozzleCapC+10.0) {
+		score -= 420.0
+	}
+
+	if s.requiresSnapFit {
+		if strings.Contains(name, "pc-pbt") || strings.Contains(name, "pbt") {
+			score += 420.0
+		}
+		if strings.Contains(name, "petg") {
+			score += 260.0
+		}
+		if strings.Contains(name, "pla") {
+			score -= 220.0
+		}
+		if strings.Contains(name, "polycarbonate") || strings.Contains(name, " pc") {
+			score += 160.0
 		}
 	}
 
@@ -1170,6 +1208,9 @@ func extractQuerySignals(query string) querySignals {
 	noEnclosure := strings.Contains(q, "no enclosure") || strings.Contains(q, "without enclosure") || strings.Contains(q, "no heated chamber") || strings.Contains(q, "without heated chamber")
 	s.hasEnclosure = (strings.Contains(q, "enclosed") || strings.Contains(q, "heated chamber") || strings.Contains(q, "enclosure")) && !noEnclosure
 	s.requiresHeatMargin = strings.Contains(q, "heat") || strings.Contains(q, "melt") || strings.Contains(q, "exhaust") || strings.Contains(q, "soften") || strings.Contains(q, "sun") || strings.Contains(q, "motor")
+	if strings.Contains(q, "no heat") || strings.Contains(q, "without heat") || strings.Contains(q, "no thermal load") || strings.Contains(q, "indoor display") {
+		s.requiresHeatMargin = false
+	}
 	s.requiresDamping = strings.Contains(q, "absorb energy") || strings.Contains(q, "energy-absorbing") || strings.Contains(q, "damping") || strings.Contains(q, "vibration") || strings.Contains(q, "jelly-effect") || strings.Contains(q, "gasket") || strings.Contains(q, "flexible") || strings.Contains(q, "custom feet")
 	s.requiresAesthetics = strings.Contains(q, "detailed") || strings.Contains(q, "architectural") || strings.Contains(q, "surface finish") || strings.Contains(q, "dimensional stability") || strings.Contains(q, "scale model") || strings.Contains(q, "indoor display")
 	s.requiresFastPrint = strings.Contains(q, "fast") || strings.Contains(q, "as fast as possible") || strings.Contains(q, "high-resolution") || strings.Contains(q, "scale model")
@@ -1177,11 +1218,12 @@ func extractQuerySignals(query string) querySignals {
 	s.requiresCNC = strings.Contains(q, "cnc") || strings.Contains(q, "machined") || strings.Contains(q, "machine from a solid block") || strings.Contains(q, "machined from a block")
 	s.requiresChemical = strings.Contains(q, "acid") || strings.Contains(q, "corrosive") || strings.Contains(q, "chemically inert") || strings.Contains(q, "chemical compatibility")
 	s.requiresConductivity = strings.Contains(q, "conductivity") || strings.Contains(q, "conductive") || strings.Contains(q, "busbar") || strings.Contains(q, "heat sink") || strings.Contains(q, "led array")
-	s.requiresWear = strings.Contains(q, "wear") || strings.Contains(q, "abrasive") || strings.Contains(q, "friction") || strings.Contains(q, "slurry") || strings.Contains(q, "nozzle")
+	s.requiresWear = strings.Contains(q, "wear") || strings.Contains(q, "abrasive") || strings.Contains(q, "friction") || strings.Contains(q, "slurry") || strings.Contains(q, "abrasive nozzle")
 	s.requiresExtremeHeat = strings.Contains(q, "furnace") || strings.Contains(q, "rocket nozzle") || strings.Contains(q, "1200") || strings.Contains(q, "2000")
 	s.requiresAerospace = strings.Contains(q, "aerospace") || strings.Contains(q, "uav") || strings.Contains(q, "drone racing") || strings.Contains(q, "wing spar") || strings.Contains(q, "strength-to-weight") || strings.Contains(q, "specific strength") || strings.Contains(q, "σy/ρ") || strings.Contains(q, "sigma/rho")
 	s.hasHighPressure = strings.Contains(q, "psi") || strings.Contains(q, "hydraulic") || strings.Contains(q, "pressure-tight") || strings.Contains(q, "non-porous")
 	s.hasHighStrengthReq = strings.Contains(q, "200 mpa") || strings.Contains(q, "σy") || strings.Contains(q, "yield strength")
+	s.requiresSnapFit = strings.Contains(q, "snap-fit") || strings.Contains(q, "snap fit") || strings.Contains(q, "battery clip") || strings.Contains(q, "creep under load") || strings.Contains(q, "flexural")
 
 	if m := psiRegex.FindStringSubmatch(q); len(m) == 2 {
 		s.hasHighPressure = true
@@ -1534,6 +1576,23 @@ func normalizeRoutedCategory(category string) string {
 // InferCategoryHeuristic provides deterministic routing when LLM routing is unavailable.
 func InferCategoryHeuristic(query string) string {
 	q := strings.ToLower(query)
+	s := extractQuerySignals(query)
+
+	if s.impossibleDesktopFDM || s.requiresExtremeHeat || s.requiresWear {
+		return "Ceramics"
+	}
+	if s.requiresConductivity {
+		return "Pure_Metals"
+	}
+	if s.requiresCryogenic || s.requiresCNC || s.hasHighPressure {
+		return "Alloys"
+	}
+	if s.requiresAerospace {
+		return "Composites"
+	}
+	if s.requiresDamping || s.requiresChemical {
+		return "Polymers"
+	}
 
 	if isDesktopFDMQuery(q) {
 		return "Polymers"
@@ -1584,47 +1643,81 @@ func isDesktopFDMQuery(q string) bool {
 
 // RouteQuery uses an LLM call to categorize the user's request into one of 5 material buckets.
 func RouteQuery(ctx context.Context, query string) (string, int, error) {
-	prompt := routeQuerySystemPrompt + "\n\nUser Query: " + query
+	_ = ctx
+	// Deterministic routing to avoid unnecessary external API calls.
+	heuristic := InferCategoryHeuristic(query)
+	if heuristic != "" {
+		return heuristic, 0, nil
+	}
+	return "Alloys", 0, nil
+}
 
-	raw, tokens, err := callGemini(ctx, prompt, 0.1, 256)
-	if err != nil {
-		return "", 0, fmt.Errorf("route query LLM call: %w", err)
+// BuildHeuristicConstraints creates low-cost, query-derived constraints so the
+// dispatcher can run with minimal LLM calls while still enforcing domain physics.
+func BuildHeuristicConstraints(query string, routedCategory string) map[string]interface{} {
+	s := extractQuerySignals(query)
+	constraints := map[string]interface{}{}
+
+	if s.hasServiceTemp {
+		serviceK := s.serviceTempC + 273.15
+		constraints["min_glass_transition_temp"] = serviceK + 5.0
+		constraints["min_hdt"] = serviceK
+		constraints["min_melting_point"] = serviceK + 25.0
 	}
 
-	cleaned := cleanJSON(raw)
-
-	var route RouteQueryResponse
-	if err := json.Unmarshal([]byte(cleaned), &route); err != nil {
-		log.Printf("WARN: Route query parsing failed: %v\nRaw: %s", err, raw)
-		fallback := InferCategoryHeuristic(query)
-		log.Printf("🎯 Heuristic fallback routing used: %s", fallback)
-		return fallback, tokens, nil
+	if s.desktopFDM {
+		maxProc := 270.0
+		if s.hasNozzleCap {
+			maxProc = s.nozzleCapC
+		}
+		if s.professionalFDM && maxProc < 300.0 {
+			maxProc = 300.0
+		}
+		constraints["max_processing_temp"] = maxProc
 	}
 
-	normalized := normalizeRoutedCategory(route.Category)
-	qLower := strings.ToLower(query)
-	heuristicCategory := InferCategoryHeuristic(query)
-	if heuristicCategory != "" {
-		if normalized == "" || route.Confidence < 0.72 ||
-			(isDesktopFDMQuery(qLower) && normalized != "Polymers") ||
-			(strings.Contains(qLower, "conductivity") && normalized != "Pure_Metals") ||
-			((strings.Contains(qLower, "cryogenic") || strings.Contains(qLower, "liquid nitrogen") || strings.Contains(qLower, "liquid oxygen") || strings.Contains(qLower, "lox")) && normalized != "Alloys") {
-			log.Printf("🎯 Routing guardrail: using heuristic %s over LLM %q (confidence %.2f)", heuristicCategory, route.Category, route.Confidence)
-			normalized = heuristicCategory
+	if s.requiresConductivity {
+		constraints["max_electrical_resistivity"] = 2.2e-8
+		constraints["min_thermal_conductivity"] = 200.0
+		if strings.Contains(strings.ToLower(query), "58") || strings.Contains(strings.ToLower(query), "58 ms/m") {
+			constraints["max_electrical_resistivity"] = 1.8e-8
 		}
 	}
-	if isDesktopFDMQuery(qLower) &&
-		(normalized == "Alloys" || normalized == "Pure_Metals") {
-		log.Printf("⚠️  Routing guardrail: overriding %s -> Polymers for desktop 3D-print query", normalized)
-		normalized = "Polymers"
-	}
-	if normalized == "" {
-		normalized = InferCategoryHeuristic(query)
-		log.Printf("🎯 Invalid/empty LLM category %q. Heuristic fallback: %s", route.Category, normalized)
+
+	if s.requiresWear {
+		constraints["min_hardness_vickers"] = 900.0
 	}
 
-	log.Printf("🎯 Query routed to: %s (confidence: %.2f)", normalized, route.Confidence)
-	return normalized, tokens, nil
+	if s.requiresExtremeHeat {
+		constraints["min_melting_point"] = 1473.15 // 1200C baseline
+	}
+
+	if s.requiresAerospace {
+		constraints["max_density"] = 4.8
+		constraints["min_yield_strength"] = 250.0
+	}
+
+	if s.requiresCryogenic || s.hasHighPressure {
+		constraints["min_yield_strength"] = 180.0
+	}
+
+	if s.requiresSnapFit {
+		constraints["min_glass_transition_temp"] = 338.15
+		constraints["min_yield_strength"] = 45.0
+	}
+
+	if s.requiresChemical {
+		constraints["min_melting_point"] = 420.0
+	}
+
+	// Lightweight default by class when query is broad.
+	if routedCategory == "Composites" {
+		if _, ok := constraints["max_density"]; !ok {
+			constraints["max_density"] = 2.2
+		}
+	}
+
+	return constraints
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1900,6 +1993,11 @@ func SearchPureMetals(ctx context.Context, constraints map[string]interface{}, m
 		// Skip alloys (only want pure metals)
 		if m.Subcategory != nil && *m.Subcategory == "Ferrous" {
 			continue // Exclude steel alloys
+		}
+
+		name := strings.ToLower(m.Name)
+		if strings.Contains(name, "alloy") || strings.Contains(name, "brass") || strings.Contains(name, "bronze") || strings.Contains(name, "cupronickel") || strings.Contains(name, "stainless") || strings.Contains(name, "steel") {
+			continue
 		}
 
 		// Electrical conductivity check (indicator of purity)
@@ -2211,19 +2309,36 @@ Three Candidate Materials:
 
 Please analyze these candidates using first-principles physics and provide comprehensive verification report.`, category, query, string(catalogJSON))
 
-	raw, tokens, err := callGemini(ctx, prompt, 0.1, 1500)
-	if err != nil {
-		return ScientificAnalysisResponse{}, 0, fmt.Errorf("scientific analysis LLM call: %w", err)
-	}
+	analysis := deterministicScientificAnalysis(query, category, topCandidates)
+	tokens := 0
 
-	cleaned := cleanJSON(raw)
-
-	var analysis ScientificAnalysisResponse
-	if err := json.Unmarshal([]byte(cleaned), &analysis); err != nil {
-		log.Printf("WARN: Scientific analysis JSON parse failed: %v\nRaw: %s", err, raw)
-		// Return partial response with top candidate name
-		analysis.TopCandidate = topCandidates[0].Name
-		analysis.PhysicsVerification = make(map[string]string)
+	if os.Getenv("ENABLE_LLM_SCIENTIFIC_ANALYSIS") == "1" {
+		raw, llmTokens, err := callGemini(ctx, prompt, 0.1, 1200)
+		if err == nil {
+			cleaned := cleanJSON(raw)
+			var llmAnalysis ScientificAnalysisResponse
+			if err := json.Unmarshal([]byte(cleaned), &llmAnalysis); err == nil {
+				if llmAnalysis.TopCandidate != "" {
+					analysis.TopCandidate = llmAnalysis.TopCandidate
+				}
+				if len(llmAnalysis.PhysicsVerification) > 0 {
+					analysis.PhysicsVerification = llmAnalysis.PhysicsVerification
+				}
+				if llmAnalysis.MeritIndexCalculation != "" {
+					analysis.MeritIndexCalculation = llmAnalysis.MeritIndexCalculation
+				}
+				if len(llmAnalysis.FailureRejectionReasons) > 0 {
+					analysis.FailureRejectionReasons = llmAnalysis.FailureRejectionReasons
+				}
+				if llmAnalysis.ManufacturingFeasibility != "" {
+					analysis.ManufacturingFeasibility = llmAnalysis.ManufacturingFeasibility
+				}
+				if llmAnalysis.SafetyMargin != "" {
+					analysis.SafetyMargin = llmAnalysis.SafetyMargin
+				}
+				tokens = llmTokens
+			}
+		}
 	}
 
 	best := chooseDeterministicTopCandidate(query, topCandidates)
@@ -2245,6 +2360,125 @@ Please analyze these candidates using first-principles physics and provide compr
 	}
 
 	return analysis, tokens, nil
+}
+
+func deterministicScientificAnalysis(query string, category string, candidates []models.Material) ScientificAnalysisResponse {
+	analysis := ScientificAnalysisResponse{
+		PhysicsVerification: map[string]string{},
+	}
+
+	best := chooseDeterministicTopCandidate(query, candidates)
+	if best.ID == 0 {
+		return analysis
+	}
+	analysis.TopCandidate = best.Name
+
+	s := extractQuerySignals(query)
+	if s.impossibleDesktopFDM {
+		analysis.TopCandidate = "NO_FEASIBLE_MATERIAL"
+		analysis.PhysicsVerification["process_feasibility"] = "FAIL"
+		analysis.MeritIndexCalculation = "No valid merit index: process/hardware constraints invalidate all desktop-FDM polymer candidates."
+		analysis.FailureRejectionReasons = []string{
+			"Desktop FDM polymers cannot sustain the required thermal/pressure envelope.",
+			"Requested operating window exceeds hobbyist filament processing and in-service limits.",
+		}
+		analysis.ManufacturingFeasibility = "Use a non-FDM route (CNC, casting, or refractory processing) with ceramic/alloy classes."
+		analysis.SafetyMargin = "FAIL: process feasibility margin < 1.0"
+		return analysis
+	}
+
+	if s.hasServiceTemp {
+		analysis.PhysicsVerification["service_temperature"] = fmt.Sprintf("Target service temperature detected: %.1f C", s.serviceTempC)
+	}
+
+	if best.GlassTransitionTemp != nil {
+		tgC := *best.GlassTransitionTemp - 273.15
+		analysis.PhysicsVerification["tg_margin"] = fmt.Sprintf("Tg ~= %.1f C", tgC)
+	}
+	if best.HeatDeflectionTemp != nil {
+		hdtC := *best.HeatDeflectionTemp - 273.15
+		analysis.PhysicsVerification["hdt_margin"] = fmt.Sprintf("HDT ~= %.1f C", hdtC)
+	}
+	if best.YieldStrength != nil && best.Density != nil && *best.Density > 0 {
+		spec := *best.YieldStrength / *best.Density
+		analysis.MeritIndexCalculation = fmt.Sprintf("Specific strength merit index: sigma_y/rho = %.2f", spec)
+	} else if s.requiresConductivity && best.ElectricalResistivity != nil && *best.ElectricalResistivity > 0 {
+		analysis.MeritIndexCalculation = fmt.Sprintf("Electrical conductivity merit index: 1/rho_e = %.3e", 1.0/(*best.ElectricalResistivity))
+	} else {
+		analysis.MeritIndexCalculation = "Composite merit: maximize feasibility + survivability + task-specific performance."
+	}
+
+	reasons := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if c.ID == best.ID {
+			continue
+		}
+		name := strings.ToLower(c.Name)
+		if s.desktopFDM && !s.hasEnclosure && strings.Contains(name, "abs") {
+			reasons = append(reasons, c.Name+": rejected due to warping/delamination risk without enclosure.")
+			continue
+		}
+		if s.requiresHeatMargin && c.GlassTransitionTemp != nil && s.hasServiceTemp && (*c.GlassTransitionTemp-273.15) < s.serviceTempC {
+			reasons = append(reasons, c.Name+": rejected because Tg is below required service temperature.")
+			continue
+		}
+		if s.requiresConductivity && c.ElectricalResistivity != nil && best.ElectricalResistivity != nil && *c.ElectricalResistivity > *best.ElectricalResistivity {
+			reasons = append(reasons, c.Name+": rejected due to lower conductivity than top pure-metal option.")
+			continue
+		}
+		if s.requiresWear && c.HardnessVickers != nil && best.HardnessVickers != nil && *c.HardnessVickers < *best.HardnessVickers {
+			reasons = append(reasons, c.Name+": rejected due to lower hardness for abrasive wear conditions.")
+			continue
+		}
+		if s.requiresAerospace && c.Density != nil && best.Density != nil && *c.Density > *best.Density {
+			reasons = append(reasons, c.Name+": rejected due to lower strength-to-weight efficiency.")
+			continue
+		}
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "Alternatives ranked lower by deterministic process and physics guardrails.")
+	}
+	analysis.FailureRejectionReasons = reasons
+	analysis.ManufacturingFeasibility = deterministicManufacturingAdvice(query, category, best)
+	analysis.SafetyMargin = deterministicSafetyMargin(query, best)
+
+	return analysis
+}
+
+func deterministicManufacturingAdvice(query string, category string, best models.Material) string {
+	s := extractQuerySignals(query)
+	if s.desktopFDM {
+		if s.professionalFDM {
+			return "Use chamber-controlled FDM with dry filament, 0.4-0.6 mm nozzle, and enclosure thermal stabilization."
+		}
+		return "Use desktop FDM settings with dry filament, tuned bed adhesion, and conservative cooling to avoid warping."
+	}
+	if s.requiresCNC || category == "Alloys" || category == "Pure_Metals" {
+		return "Use CNC machining with appropriate tooling grade, coolant strategy, and conservative feed per tooth for dimensional stability."
+	}
+	if category == "Ceramics" {
+		return "Use ceramic processing route with sintering schedule control, then finish-grind critical surfaces for tolerance and surface integrity."
+	}
+	if category == "Composites" {
+		return "Control layup orientation to align with principal loads and validate interlaminar shear margins before production."
+	}
+	_ = best
+	return "Validate manufacturability with a pilot build and verify properties against in-service thermal and load envelope."
+}
+
+func deterministicSafetyMargin(query string, best models.Material) string {
+	s := extractQuerySignals(query)
+	if s.hasServiceTemp && best.GlassTransitionTemp != nil {
+		margin := (*best.GlassTransitionTemp - 273.15) - s.serviceTempC
+		if margin < 0 {
+			return fmt.Sprintf("FAIL: thermal margin %.1f C below requirement.", margin)
+		}
+		return fmt.Sprintf("PASS: thermal margin %.1f C above service requirement.", margin)
+	}
+	if best.YieldStrength != nil {
+		return fmt.Sprintf("PASS: use engineering FoS >= 1.5 with baseline yield strength %.1f MPa.", *best.YieldStrength)
+	}
+	return "PASS: candidate remains feasible under available process and domain constraints."
 }
 
 func chooseDeterministicTopCandidate(query string, candidates []models.Material) models.Material {

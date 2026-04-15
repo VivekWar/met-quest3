@@ -6,6 +6,7 @@
 -- Enable extensions
 CREATE EXTENSION IF NOT EXISTS pg_trgm;   -- for fuzzy name search
 CREATE EXTENSION IF NOT EXISTS unaccent;  -- for accent-insensitive search
+CREATE EXTENSION IF NOT EXISTS vector;    -- for semantic vector retrieval
 
 -- ----------------------------------------------------------------
 --  Main materials table
@@ -92,3 +93,17 @@ CREATE TABLE IF NOT EXISTS query_log (
     result_ids      INT[],
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ----------------------------------------------------------------
+--  Material embeddings (semantic vector retrieval)
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS material_embeddings (
+    material_id      INT PRIMARY KEY REFERENCES materials(id) ON DELETE CASCADE,
+    embedding        vector(768),
+    embedding_model  TEXT NOT NULL DEFAULT 'text-embedding-004',
+    updated_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mat_embeddings_ivfflat
+    ON material_embeddings USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);

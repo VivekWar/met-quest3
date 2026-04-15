@@ -23,12 +23,14 @@ The project combines a Go/Gin backend, a React/Vite frontend, modular materials 
 
 - Recommends materials from natural-language engineering requirements.
 - Routes advanced queries through a category-aware dispatcher for polymers, alloys, pure metals, ceramics, and composites.
+- Uses hybrid retrieval: domain-specific hard filters + semantic vector similarity for better candidate recall.
 - Runs physics-focused verification before returning the final recommendation.
 - Applies query-signal safeguards for desktop FDM, nozzle limits, enclosures, service temperature, damping, CNC, cryogenic, and high-pressure requests.
 - Uses deterministic fallback ranking when an LLM response is unavailable, incomplete, or returns too few catalog IDs.
 - Predicts custom alloy properties from element composition using rule-of-mixtures plus LLM refinement.
 - Loads the materials catalog from local CSV files by default, with optional Neon/PostgreSQL support.
 - Falls back gracefully when Postgres or an LLM provider is unavailable.
+- Supports Gemini embeddings with pgvector schema support (`material_embeddings`) and in-memory vector fallback when embeddings are unavailable.
 
 ## Current Architecture
 
@@ -43,7 +45,9 @@ graph TD
     Signals --> Fallbacks[Deterministic Ranking + Feasibility Filters]
     API --> Dispatcher[Category Dispatcher]
     Dispatcher --> Search[Specialized Physics Search]
+    Search --> Vector[Hybrid Vector Retrieval]
     Search --> Analysis[Scientific Verification]
+    Vector --> Analysis
     API --> Predictor[Alloy Predictor]
     API --> LLM[Google Gemini / OpenRouter Fallback]
     Analysis --> Response[Recommendation Report]
@@ -90,6 +94,7 @@ The backend lives in [`backend/`](backend/) and is written in Go.
 - [`backend/handlers/recommend.go`](backend/handlers/recommend.go): contains both the legacy recommendation handler and the new dispatcher handler.
 - [`backend/handlers/predict.go`](backend/handlers/predict.go): validates alloy composition requests and calls the predictor service.
 - [`backend/services/llm.go`](backend/services/llm.go): provider-aware Gemini/OpenRouter calls, intent extraction, long-context analysis, query-signal extraction, fallback ranking, desktop-print feasibility filtering, dispatcher routing, specialized search, and scientific analysis.
+- [`backend/services/vector.go`](backend/services/vector.go): semantic vector retrieval using Gemini embeddings when available and deterministic hashed-vector fallback when offline.
 - [`backend/services/csv_db.go`](backend/services/csv_db.go): loads modular CSV catalogs into memory for fast local and production fallback searches.
 - [`backend/services/predictor.go`](backend/services/predictor.go): computes rule-of-mixtures baselines and asks the LLM for thermodynamic refinement.
 - [`backend/db/postgres.go`](backend/db/postgres.go): optional PostgreSQL connection pool with mock-mode fallback.
@@ -180,6 +185,7 @@ The data layer is CSV-first, with optional database sync.
 | [`data/schema.sql`](data/schema.sql) | PostgreSQL schema. |
 | [`data/seed_db.py`](data/seed_db.py) | Bulk CSV to Postgres loader. |
 | [`data/fetch_materials.py`](data/fetch_materials.py) | Materials Project ingestion helper. |
+| [`data/analyze_dataset.py`](data/analyze_dataset.py) | Null-rate + benchmark coverage audit for scraped/API data quality. |
 
 The backend also contains deployment-ready copies under [`backend/data/`](backend/data/) for Docker/Hugging Face packaging.
 
@@ -253,6 +259,24 @@ Start the backend first, then run:
 ./test_dispatcher.sh
 ```
 
+### Strategic Hackathon Validation (10 Cases)
+
+This suite validates the requested Pareto, hardware, cryogenic, conductivity, and rejection scenarios:
+
+```bash
+./test_hackathon_cases.sh
+```
+
+Expected result: `Passed: 10` and `Failed: 0`.
+
+### Data Quality Audit
+
+To analyze scraped/API dataset completeness and benchmark-material coverage:
+
+```bash
+python3 data/analyze_dataset.py
+```
+
 The script exercises polymer, alloy, ceramic, composite, pure-metal, and edge-case queries against `/api/v1/recommend/dispatcher`.
 
 ## Optional Database Workflow
@@ -301,6 +325,19 @@ firebase deploy --only hosting
 Firebase hosting is configured in [`firebase.json`](firebase.json).
 
 Backend production updates are deployed through the Hugging Face Spaces remote. Frontend production updates are deployed through Firebase Hosting.
+
+Recommended backend production push workflow:
+
+```bash
+git push hf main
+git ls-remote hf refs/heads/main
+```
+
+After deployment, verify:
+
+```bash
+curl -s https://vivekwa-met-quest-api.hf.space/health
+```
 
 ## Project Notes
 

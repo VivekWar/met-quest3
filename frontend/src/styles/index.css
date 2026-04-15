@@ -467,3 +467,118 @@ tbody td:first-child {
 .font-mono  { font-family: var(--font-mono); }
 .full-width { width: 100%; }
 .text-right { text-align: right; }
+
+/* ── Mobile Responsiveness ───────────────────────────────────── */
+@media (max-width: 900px) {
+  .card {
+    padding: 20px;
+  }
+
+  .nav-inner {
+    height: auto !important;
+    min-height: 64px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 10px 0;
+  }
+
+  .nav-brand {
+    margin-right: 0 !important;
+    min-width: 100%;
+  }
+
+  .nav-tabs {
+    min-width: 100%;
+    order: 2;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .nav-tabs .btn {
+    white-space: nowrap;
+  }
+
+  .nav-badge {
+    order: 3;
+    margin-left: 0 !important;
+  }
+
+  .query-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .query-controls {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .query-controls select,
+  .query-controls button {
+    width: 100% !important;
+  }
+
+  .predictor-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .predictor-row .input--number {
+    width: 78px;
+  }
+
+  .predictor-add-row {
+    flex-direction: column;
+  }
+
+  .predictor-add-row .btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .container {
+    padding: 0 14px;
+  }
+
+  .top-nav {
+    padding: 0 12px !important;
+  }
+
+  .nav-tabs .btn {
+    font-size: 0.74rem !important;
+    padding: 6px 10px !important;
+  }
+
+  .query-examples {
+    gap: 6px !important;
+  }
+
+  .query-examples .btn {
+    padding: 4px 8px !important;
+  }
+
+  .report-tokens {
+    margin-left: 0 !important;
+    width: 100%;
+    text-align: left !important;
+  }
+
+  h1 {
+    font-size: 1.65rem;
+  }
+
+  .table-wrapper {
+    border-radius: 8px;
+  }
+
+  thead th,
+  tbody td {
+    padding: 9px 10px;
+  }
+
+  .nav-badge {
+    display: none !important;
+  }
+}

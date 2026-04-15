@@ -30,16 +30,16 @@ const App: React.FC = () => {
   return (
     <div>
       {/* ── Navigation ──────────────────────────────────────────── */}
-      <nav style={{
+      <nav className="top-nav" style={{
         position: 'sticky', top: 0, zIndex: 100,
         background: 'rgba(8,12,24,0.9)',
         backdropFilter: 'blur(16px)',
         borderBottom: '1px solid var(--color-border)',
         padding: '0 24px',
       }}>
-        <div className="container" style={{ display: 'flex', alignItems: 'center', height: 64 }}>
+        <div className="container nav-inner" style={{ display: 'flex', alignItems: 'center', height: 64 }}>
           {/* Logo */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginRight: 48 }}>
+          <div className="nav-brand" style={{ display: 'flex', alignItems: 'center', gap: 12, marginRight: 48 }}>
             <div style={{
               width: 36, height: 36, borderRadius: 9,
               background: 'linear-gradient(135deg, #00d4ff, #0080ff)',
@@ -56,10 +56,10 @@ const App: React.FC = () => {
           </div>
 
           {/* Tabs */}
-          <div style={{ display: 'flex', gap: 4, flex: 1 }}>
+          <div className="nav-tabs" style={{ display: 'flex', gap: 4, flex: 1 }}>
             {([
-              { key: 'recommend', label: '🔍 Material Recommender', id: 'tab-recommend' },
-              { key: 'predict',   label: '⚗️ Alloy Predictor',       id: 'tab-predict'   },
+              { key: 'recommend', label: 'Material Recommender', id: 'tab-recommend' },
+              { key: 'predict',   label: 'Alloy Predictor',      id: 'tab-predict'   },
             ] as const).map(tab => (
               <button
                 key={tab.key}
@@ -77,7 +77,7 @@ const App: React.FC = () => {
           </div>
 
           {/* DB badge */}
-          <div style={{
+          <div className="nav-badge" style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '6px 14px',
             background: 'rgba(0,255,159,0.08)',

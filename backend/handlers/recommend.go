@@ -114,6 +114,10 @@ func RecommendWithDispatcher(c *gin.Context) {
 		log.Printf("⚠️  RouteQuery failed (will use ExtractIntent fallback): %v", err)
 		routedCategory = "Unknown"
 	}
+	if hinted := domainHintCategory(req.Domain); hinted != "" {
+		routedCategory = hinted
+		pipelineSteps = append(pipelineSteps, "🧭 Domain hint enforced category: "+routedCategory)
+	}
 	totalTokensUsed += routeTokens
 	pipelineSteps = append(pipelineSteps, "✅ Query routed to: "+routedCategory)
 
@@ -154,46 +158,57 @@ func RecommendWithDispatcher(c *gin.Context) {
 		return
 	}
 
+	if strings.TrimSpace(req.Domain) != "" {
+		domainFiltered := services.FilterByDomain(req.Domain, allMaterials)
+		if len(domainFiltered) > 0 {
+			allMaterials = domainFiltered
+			pipelineSteps = append(pipelineSteps, fmt.Sprintf("✅ Domain filter applied (%s): %d materials", req.Domain, len(allMaterials)))
+		} else {
+			pipelineSteps = append(pipelineSteps, fmt.Sprintf("⚠️  Domain filter (%s) returned 0; using full catalog", req.Domain))
+		}
+	}
+
 	pipelineSteps = append(pipelineSteps, fmt.Sprintf("✅ Loaded %d materials from database", len(allMaterials)))
 
 	// ── Step 3: Category-Specific Search ────────────────────────────────────
 	var candidates []models.Material
-	constraints := make(map[string]interface{})
+	constraints := services.BuildHeuristicConstraints(req.Query, routedCategory)
 
-	// Extract constraints from the query using the existing intent extraction
-	intent, intentTokens, _ := services.ExtractIntent(ctx, req.Query)
-	totalTokensUsed += intentTokens
-
-	// Convert intent filters to constraints
-	for prop, rf := range intent.Filters {
-		if rf.Min != nil {
-			constraints["min_"+prop] = *rf.Min
+	// Optional LLM intent extraction. Kept behind env flag to reduce API usage.
+	if strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Enable-LLM-Intent")), "1") {
+		intent, intentTokens, _ := services.ExtractIntent(ctx, req.Query)
+		totalTokensUsed += intentTokens
+		for prop, rf := range intent.Filters {
+			if rf.Min != nil {
+				constraints["min_"+prop] = *rf.Min
+			}
+			if rf.Max != nil {
+				constraints["max_"+prop] = *rf.Max
+			}
 		}
-		if rf.Max != nil {
-			constraints["max_"+prop] = *rf.Max
-		}
+		pipelineSteps = append(pipelineSteps, "✅ LLM intent constraints enabled via request header")
 	}
 
 	// Route to category-specific search
 	switch routedCategory {
 	case "Polymers":
-		candidates = services.SearchPolymers(ctx, constraints, allMaterials, 15)
+		candidates = services.SearchPolymers(ctx, constraints, allMaterials, 40)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchPolymers: found %d candidates", len(candidates)))
 
 	case "Alloys":
-		candidates = services.SearchAlloys(ctx, constraints, allMaterials, 15)
+		candidates = services.SearchAlloys(ctx, constraints, allMaterials, 40)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchAlloys: found %d candidates", len(candidates)))
 
 	case "Pure_Metals":
-		candidates = services.SearchPureMetals(ctx, constraints, allMaterials, 15)
+		candidates = services.SearchPureMetals(ctx, constraints, allMaterials, 40)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchPureMetals: found %d candidates", len(candidates)))
 
 	case "Ceramics":
-		candidates = services.SearchCeramics(ctx, constraints, allMaterials, 15)
+		candidates = services.SearchCeramics(ctx, constraints, allMaterials, 40)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchCeramics: found %d candidates", len(candidates)))
 
 	case "Composites":
-		candidates = services.SearchComposites(ctx, constraints, allMaterials, 15)
+		candidates = services.SearchComposites(ctx, constraints, allMaterials, 40)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🔍 SearchComposites: found %d candidates", len(candidates)))
 
 	default:
@@ -205,6 +220,12 @@ func RecommendWithDispatcher(c *gin.Context) {
 			candidates = allMaterials
 		}
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("⚠️  Generic search: %d candidates", len(candidates)))
+	}
+
+	vectorCandidates := services.HybridVectorRetrieve(ctx, req.Query, routedCategory, allMaterials, 30)
+	if len(vectorCandidates) > 0 {
+		candidates = mergeUniqueCandidates(candidates, vectorCandidates, 40)
+		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🧠 Vector retrieval merged %d candidates", len(vectorCandidates)))
 	}
 
 	if len(candidates) < 3 {
@@ -297,14 +318,10 @@ func RecommendWithDispatcher(c *gin.Context) {
 // ──────────────────────────────────────────────────────────────────────────
 
 func joinSteps(steps []string) string {
-	result := ""
-	for i, step := range steps {
-		if i > 0 {
-			result += "\n"
-		}
-		result += step
+	if len(steps) == 0 {
+		return ""
 	}
-	return result
+	return strings.Join(steps, " | ")
 }
 
 func mapRoutedCategoryToDomain(routedCategory string) string {
@@ -319,6 +336,21 @@ func mapRoutedCategoryToDomain(routedCategory string) string {
 		return "Advanced Composites"
 	default:
 		return "Overall (Top 1000)"
+	}
+}
+
+func domainHintCategory(domain string) string {
+	switch strings.TrimSpace(strings.ToLower(domain)) {
+	case strings.ToLower("Plastics & Polymers"):
+		return "Polymers"
+	case strings.ToLower("Advanced Composites"):
+		return "Composites"
+	case strings.ToLower("High-Temperature / Refractory"), strings.ToLower("Tooling & Wear-Resistant"):
+		return "Ceramics"
+	case strings.ToLower("Electronics & Photonics"):
+		return "Pure_Metals"
+	default:
+		return ""
 	}
 }
 
