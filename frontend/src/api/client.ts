@@ -107,29 +107,50 @@ export interface PredictResponse {
 function buildDispatcherReport(data: DispatcherResponse): string {
   const topName = data.top_recommendation?.name || data.physics_analysis?.top_candidate || 'No feasible material'
   const topThree = (data.top_recommendation?.id ? [data.top_recommendation, ...(data.alternative_options || [])] : (data.category_candidates || [])).slice(0, 3)
+  const top = data.top_recommendation
   const parts: string[] = []
 
-  parts.push('## Final Recommendation')
-  parts.push(`${topName} is the best overall fit for your request.`)
-  parts.push(`The query was routed to the ${data.routed_category} family based on your constraints and process requirements.`)
+  parts.push(`Recommendation: ${topName}.`)
+
+  const propertySnippets: string[] = []
+  if (top?.glass_transition_temp !== undefined) {
+    propertySnippets.push(`Glass transition temperature ~${Math.round(top.glass_transition_temp - 273.15)}°C`)
+  }
+  if (top?.heat_deflection_temp !== undefined) {
+    propertySnippets.push(`Heat deflection temperature ~${Math.round(top.heat_deflection_temp - 273.15)}°C`)
+  }
+  if (top?.yield_strength !== undefined) {
+    propertySnippets.push(`Yield strength ~${Math.round(top.yield_strength)} MPa`)
+  }
+  if (top?.thermal_conductivity !== undefined) {
+    propertySnippets.push(`Thermal conductivity ~${top.thermal_conductivity.toFixed(1)} W/mK`)
+  }
+  if (top?.density !== undefined) {
+    propertySnippets.push(`Density ~${top.density.toFixed(2)} g/cm3`)
+  }
+  if (propertySnippets.length > 0) {
+    parts.push(`● Properties Retrieved: ${propertySnippets.join(', ')}.`)
+  }
+
+  const explanationParts: string[] = []
+  explanationParts.push(`${topName} was selected after routing this problem to ${data.routed_category}.`)
+  if (data.physics_analysis?.merit_index_calculation) {
+    explanationParts.push(data.physics_analysis.merit_index_calculation + '.')
+  }
+  if (data.physics_analysis?.safety_margin) {
+    explanationParts.push(data.physics_analysis.safety_margin)
+  }
+  if (data.physics_analysis?.manufacturing_feasibility) {
+    explanationParts.push(data.physics_analysis.manufacturing_feasibility)
+  }
+  parts.push(`● Explanation: "${explanationParts.join(' ')}"`)
 
   if (topThree.length > 0) {
     parts.push('')
-    parts.push('## Top 3 Shortlist')
+    parts.push('Top 3 shortlist:')
     topThree.forEach((mat, idx) => {
       parts.push(`${idx + 1}. ${mat.name}`)
     })
-  }
-
-  parts.push('')
-  parts.push('## Why This Material Was Chosen')
-
-  if (data.physics_analysis?.merit_index_calculation) {
-    parts.push(`Performance check: ${data.physics_analysis.merit_index_calculation}`)
-  }
-
-  if (data.physics_analysis?.safety_margin) {
-    parts.push(`Safety check: ${data.physics_analysis.safety_margin}`)
   }
 
   const physics = data.physics_analysis?.physics_verification || {}
@@ -145,19 +166,13 @@ function buildDispatcherReport(data: DispatcherResponse): string {
   const failures = data.physics_analysis?.failure_rejection_reasons || []
   if (failures.length > 0) {
     parts.push('')
-    parts.push('## Why Other Materials Were Rejected')
+    parts.push('Why alternatives were rejected:')
     failures.slice(0, 6).forEach((r) => parts.push(`- ${r}`))
-  }
-
-  if (data.physics_analysis?.manufacturing_feasibility) {
-    parts.push('')
-    parts.push('## Practical Manufacturing Guidance')
-    parts.push(data.physics_analysis.manufacturing_feasibility)
   }
 
   if (data.pipeline_explanation) {
     parts.push('')
-    parts.push('## Decision Path (Simplified)')
+    parts.push('Decision path (simplified):')
     const steps = data.pipeline_explanation
       .replace('Pipeline Steps:', '')
       .split('|')
@@ -168,7 +183,7 @@ function buildDispatcherReport(data: DispatcherResponse): string {
 
   if (data.alloy_prediction?.should_display) {
     parts.push('')
-    parts.push('## AI Alloy Performance Prediction')
+    parts.push('AI Alloy Performance Prediction:')
     parts.push(data.alloy_prediction.summary)
     if (data.alloy_prediction.key_findings && Object.keys(data.alloy_prediction.key_findings).length > 0) {
       parts.push('')

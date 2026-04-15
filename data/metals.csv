@@ -1,6 +1,7 @@
 name,formula,category,subcategory,density,thermal_conductivity,yield_strength,tensile_strength,youngs_modulus,hardness_vickers,thermal_expansion,electrical_resistivity,notes,source,mp_material_id,crystal_system
 Aluminum,Al,Metal,Non-Ferrous,2.7,237.0,35.0,90.0,70.0,17.0,23.1,2.65e-08,,Curated,,
 Copper,Cu,Metal,Non-Ferrous,8.96,401.0,70.0,220.0,120.0,35.0,16.5,1.68e-08,,Curated,,
+Oxygen-Free High Conductivity Copper (OFHC C101),Cu,Metal,Non-Ferrous,8.94,401.0,69.0,220.0,117.0,35.0,16.3,1.68e-08,Ultra-high purity copper for maximum thermal/electrical conductivity,Curated,,
 Iron,Fe,Metal,Ferrous,7.87,80.0,80.0,400.0,211.0,60.0,11.8,9.71e-08,,Curated,,
 Titanium,Ti,Metal,Non-Ferrous,4.51,21.9,140.0,220.0,116.0,70.0,8.6,4.2e-07,,Curated,,
 Nickel,Ni,Metal,Non-Ferrous,8.91,91.0,59.0,317.0,200.0,64.0,13.4,6.99e-08,,Curated,,
@@ -41,6 +42,7 @@ Inconel 625,Ni-Cr-Mo-Nb,Metal,Superalloy,8.44,9.8,415.0,930.0,207.0,200.0,12.8,1
 Hastelloy C-276,Ni-Mo-Cr,Metal,Superalloy,8.89,10.2,414.0,790.0,205.0,210.0,11.2,1.25e-06,,Curated,,
 Monel 400,Ni-Cu,Metal,Non-Ferrous,8.8,21.8,240.0,550.0,179.0,130.0,13.9,5.47e-07,,Curated,,
 Nitinol NiTi,Ni-Ti,Metal,Shape-Memory,6.45,8.6,195.0,895.0,75.0,250.0,11.0,8.2e-07,,Curated,,
+Invar 36 (Fe64Ni36),Fe-Ni,Metal,Low-Expansion,8.05,13.0,240.0,490.0,141.0,160.0,1.2,7.8e-07,Near-zero thermal expansion precision alloy,Curated,,
 Solder 60Sn-40Pb,Sn-Pb,Metal,Non-Ferrous,8.52,50.0,,60.0,32.0,14.0,24.0,1.5e-07,,Curated,,
 Cast Iron (Gray),Fe-C-Si,Metal,Ferrous,7.15,51.0,,250.0,100.0,200.0,10.8,1e-06,,Curated,,
 Maraging Steel 300,Fe-Ni-Co-Mo,Metal,Ferrous,8.0,25.0,1900.0,1965.0,190.0,600.0,10.4,6e-07,,Curated,,

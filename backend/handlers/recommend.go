@@ -158,18 +158,29 @@ func RecommendWithDispatcher(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Materials database is empty"})
 		return
 	}
+	rawAllMaterials := append([]models.Material(nil), allMaterials...)
 
 	if strings.TrimSpace(req.Domain) != "" {
-		domainFiltered := services.FilterByDomain(req.Domain, allMaterials)
-		if len(domainFiltered) > 0 {
-			allMaterials = domainFiltered
-			pipelineSteps = append(pipelineSteps, fmt.Sprintf("✅ Domain filter applied (%s): %d materials", req.Domain, len(allMaterials)))
+		domainLower := strings.ToLower(strings.TrimSpace(req.Domain))
+		if domainLower == strings.ToLower("Overall (Top 1000)") && services.RequiresExpandedCatalog(req.Query) {
+			pipelineSteps = append(pipelineSteps, "✅ Expanded catalog mode enabled for specialty query")
 		} else {
-			pipelineSteps = append(pipelineSteps, fmt.Sprintf("⚠️  Domain filter (%s) returned 0; using full catalog", req.Domain))
+			domainFiltered := services.FilterByDomain(req.Domain, allMaterials)
+			if len(domainFiltered) > 0 {
+				allMaterials = domainFiltered
+				pipelineSteps = append(pipelineSteps, fmt.Sprintf("✅ Domain filter applied (%s): %d materials", req.Domain, len(allMaterials)))
+			} else {
+				pipelineSteps = append(pipelineSteps, fmt.Sprintf("⚠️  Domain filter (%s) returned 0; using full catalog", req.Domain))
+			}
 		}
 	}
 
 	pipelineSteps = append(pipelineSteps, fmt.Sprintf("✅ Loaded %d materials from database", len(allMaterials)))
+
+	if categoryCount(routedCategory, allMaterials) < 8 {
+		allMaterials = rawAllMaterials
+		pipelineSteps = append(pipelineSteps, "↩️  Domain filter relaxed to preserve routed category coverage")
+	}
 
 	// ── Step 3: Category-Specific Search ────────────────────────────────────
 	var candidates []models.Material
@@ -235,6 +246,8 @@ func RecommendWithDispatcher(c *gin.Context) {
 		candidates = mergeUniqueCandidates(candidates, cascade, 15)
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("↪️  Cascade keyword fallback: merged to %d candidates", len(candidates)))
 	}
+
+	candidates = services.InjectPriorityCandidates(req.Query, routedCategory, candidates, rawAllMaterials, 40)
 
 	if len(candidates) == 0 {
 		log.Printf("⚠️ 0 results in specialized search. Falling back to Domain Keyword search.")
@@ -325,6 +338,40 @@ func RecommendWithDispatcher(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+func categoryCount(routedCategory string, mats []models.Material) int {
+	count := 0
+	for _, m := range mats {
+		cat := strings.ToLower(m.Category)
+		sub := ""
+		if m.Subcategory != nil {
+			sub = strings.ToLower(*m.Subcategory)
+		}
+		switch routedCategory {
+		case "Polymers":
+			if cat == "polymer" {
+				count++
+			}
+		case "Alloys":
+			if cat == "metal" || strings.Contains(cat, "alloy") {
+				count++
+			}
+		case "Pure_Metals":
+			if cat == "metal" && sub != "ferrous" {
+				count++
+			}
+		case "Ceramics":
+			if cat == "ceramic" {
+				count++
+			}
+		case "Composites":
+			if cat == "composite" {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 // ──────────────────────────────────────────────────────────────────────────

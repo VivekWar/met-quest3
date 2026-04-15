@@ -32,28 +32,38 @@ var (
 )
 
 type querySignals struct {
-	desktopFDM           bool
-	professionalFDM      bool
-	hasEnclosure         bool
-	hasNozzleCap         bool
-	nozzleCapC           float64
-	hasServiceTemp       bool
-	serviceTempC         float64
-	requiresHeatMargin   bool
-	requiresDamping      bool
-	requiresAesthetics   bool
-	requiresFastPrint    bool
-	requiresCryogenic    bool
-	requiresCNC          bool
-	requiresChemical     bool
-	requiresConductivity bool
-	requiresWear         bool
-	requiresExtremeHeat  bool
-	requiresAerospace    bool
-	hasHighPressure      bool
-	hasHighStrengthReq   bool
-	requiresSnapFit      bool
-	impossibleDesktopFDM bool
+	desktopFDM                 bool
+	professionalFDM            bool
+	hasEnclosure               bool
+	hasNozzleCap               bool
+	nozzleCapC                 float64
+	hasServiceTemp             bool
+	serviceTempC               float64
+	requiresHeatMargin         bool
+	requiresDamping            bool
+	requiresAesthetics         bool
+	requiresFastPrint          bool
+	requiresCryogenic          bool
+	requiresCNC                bool
+	requiresChemical           bool
+	requiresConductivity       bool
+	requiresWear               bool
+	requiresExtremeHeat        bool
+	requiresAerospace          bool
+	hasHighPressure            bool
+	hasHighStrengthReq         bool
+	requiresSnapFit            bool
+	requiresConductivityPurist bool
+	requiresChemicalExtreme    bool
+	requiresSpecificModulus    bool
+	requiresHotSection         bool
+	requiresBiomedical         bool
+	requiresRadiationShielding bool
+	requiresTransparentImpact  bool
+	requiresThermalShock       bool
+	requiresShapeMemory        bool
+	requiresLowCTE             bool
+	impossibleDesktopFDM       bool
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1019,6 +1029,21 @@ func scoreMaterialForQuery(m models.Material, s querySignals) float64 {
 		}
 	}
 
+	if s.requiresChemicalExtreme {
+		if strings.Contains(name, "peek") {
+			score += 520.0
+		}
+		if strings.Contains(name, "ptfe") || strings.Contains(name, "teflon") {
+			score += 400.0
+		}
+		if strings.Contains(name, "ultem") || strings.Contains(name, "pei") {
+			score -= 280.0
+		}
+		if strings.Contains(name, "petg") || strings.Contains(name, "abs") || strings.Contains(name, "pla") {
+			score -= 420.0
+		}
+	}
+
 	if s.requiresCNC || s.requiresCryogenic || s.hasHighPressure {
 		if cat == "metal" || strings.Contains(cat, "alloy") {
 			score += 120.0
@@ -1058,6 +1083,15 @@ func scoreMaterialForQuery(m models.Material, s querySignals) float64 {
 		}
 		if m.ElectricalResistivity != nil && *m.ElectricalResistivity > 0 {
 			score += 1.0 / *m.ElectricalResistivity / 2e6
+		}
+	}
+
+	if s.requiresConductivityPurist {
+		if strings.Contains(name, "oxygen-free") || strings.Contains(name, "ofhc") || strings.Contains(name, "c101") || strings.Contains(name, "c110") {
+			score += 620.0
+		}
+		if strings.Contains(name, "brass") || strings.Contains(name, "bronze") || strings.Contains(name, "cupronickel") {
+			score -= 520.0
 		}
 	}
 
@@ -1106,6 +1140,93 @@ func scoreMaterialForQuery(m models.Material, s querySignals) float64 {
 		}
 		if m.YieldStrength != nil && m.Density != nil && *m.Density > 0 {
 			score += (*m.YieldStrength / *m.Density) * 4.0
+		}
+	}
+
+	if s.requiresSpecificModulus {
+		if strings.Contains(name, "cfrp") || strings.Contains(name, "carbon fiber") {
+			score += 680.0
+		}
+		if strings.Contains(name, "steel") {
+			score -= 400.0
+		}
+		if m.YoungsModulus != nil && m.Density != nil && *m.Density > 0 {
+			score += (*m.YoungsModulus / *m.Density) * 6.0
+		}
+	}
+
+	if s.requiresHotSection {
+		if strings.Contains(name, "inconel") || strings.Contains(name, "superalloy") || strings.Contains(name, "hastelloy") {
+			score += 760.0
+		}
+		if strings.Contains(name, "aluminum") || strings.Contains(name, "aluminium") {
+			score -= 520.0
+		}
+		if strings.Contains(name, "steel") && !strings.Contains(name, "stainless") && !strings.Contains(name, "maraging") {
+			score -= 260.0
+		}
+	}
+
+	if s.requiresBiomedical {
+		if strings.Contains(name, "ti-6al-4v") || strings.Contains(name, "grade 5") || strings.Contains(name, "titanium") {
+			score += 820.0
+		}
+		if strings.Contains(name, "nickel") || strings.Contains(name, "inconel") {
+			score -= 360.0
+		}
+		if strings.Contains(name, "steel") {
+			score -= 220.0
+		}
+	}
+
+	if s.requiresRadiationShielding {
+		if strings.Contains(name, "tungsten") {
+			score += 900.0
+		}
+		if strings.Contains(name, "lead") {
+			score += 220.0
+		}
+		if m.Density != nil {
+			score += *m.Density * 40.0
+		}
+	}
+
+	if s.requiresTransparentImpact {
+		if strings.Contains(name, "polycarbonate") || strings.Contains(name, " pc") {
+			score += 760.0
+		}
+		if strings.Contains(name, "acrylic") || strings.Contains(name, "glass") {
+			score -= 260.0
+		}
+	}
+
+	if s.requiresThermalShock {
+		if strings.Contains(name, "zirconia") {
+			score += 650.0
+		}
+		if strings.Contains(name, "alumina") {
+			score += 520.0
+		}
+		if strings.Contains(name, "porcelain") {
+			score -= 300.0
+		}
+		if m.FractureToughness != nil {
+			score += *m.FractureToughness * 0.35
+		}
+	}
+
+	if s.requiresShapeMemory {
+		if strings.Contains(name, "nitinol") || strings.Contains(name, "ni-ti") {
+			score += 950.0
+		}
+	}
+
+	if s.requiresLowCTE {
+		if strings.Contains(name, "invar") {
+			score += 980.0
+		}
+		if m.ThermalExpansion != nil {
+			score -= *m.ThermalExpansion * 12.0
 		}
 	}
 
@@ -1174,7 +1295,11 @@ func applyDesktopFeasibilityFilter(query string, ids []int, allMaterials []model
 			nozzleLimit = signals.nozzleCapC
 		}
 		if !signals.hasEnclosure && m.ProcessingTempMaxC != nil && *m.ProcessingTempMaxC > nozzleLimit+20.0 {
-			continue
+			if signals.requiresChemicalExtreme && (strings.Contains(strings.ToLower(m.Name), "peek") || strings.Contains(strings.ToLower(m.Name), "ptfe") || strings.Contains(strings.ToLower(m.Name), "teflon")) {
+				// keep chemically viable options even if desktop print is not feasible; warning is emitted later
+			} else {
+				continue
+			}
 		}
 		if !signals.hasEnclosure && m.ThermalExpansion != nil && *m.ThermalExpansion > 95.0 {
 			continue
@@ -1215,15 +1340,25 @@ func extractQuerySignals(query string) querySignals {
 	s.requiresAesthetics = strings.Contains(q, "detailed") || strings.Contains(q, "architectural") || strings.Contains(q, "surface finish") || strings.Contains(q, "dimensional stability") || strings.Contains(q, "scale model") || strings.Contains(q, "indoor display")
 	s.requiresFastPrint = strings.Contains(q, "fast") || strings.Contains(q, "as fast as possible") || strings.Contains(q, "high-resolution") || strings.Contains(q, "scale model")
 	s.requiresCryogenic = strings.Contains(q, "cryogenic") || strings.Contains(q, "-150") || strings.Contains(q, "-196") || strings.Contains(q, "liquid oxygen") || strings.Contains(q, "liquid nitrogen") || strings.Contains(q, "lox")
-	s.requiresCNC = strings.Contains(q, "cnc") || strings.Contains(q, "machined") || strings.Contains(q, "machine from a solid block") || strings.Contains(q, "machined from a block")
+	s.requiresCNC = strings.Contains(q, "cnc machining") || strings.Contains(q, "machined") || strings.Contains(q, "machine from a solid block") || strings.Contains(q, "machined from a block") || strings.Contains(q, "machined via cnc")
 	s.requiresChemical = strings.Contains(q, "acid") || strings.Contains(q, "corrosive") || strings.Contains(q, "chemically inert") || strings.Contains(q, "chemical compatibility")
 	s.requiresConductivity = strings.Contains(q, "conductivity") || strings.Contains(q, "conductive") || strings.Contains(q, "busbar") || strings.Contains(q, "heat sink") || strings.Contains(q, "led array")
+	s.requiresConductivityPurist = strings.Contains(q, "absolute highest thermal conductivity") || strings.Contains(q, "absolute highest conductivity") || strings.Contains(q, "ofhc") || strings.Contains(q, "oxygen-free")
 	s.requiresWear = strings.Contains(q, "wear") || strings.Contains(q, "abrasive") || strings.Contains(q, "friction") || strings.Contains(q, "slurry") || strings.Contains(q, "abrasive nozzle")
 	s.requiresExtremeHeat = strings.Contains(q, "furnace") || strings.Contains(q, "rocket nozzle") || strings.Contains(q, "1200") || strings.Contains(q, "2000")
 	s.requiresAerospace = strings.Contains(q, "aerospace") || strings.Contains(q, "uav") || strings.Contains(q, "drone racing") || strings.Contains(q, "wing spar") || strings.Contains(q, "strength-to-weight") || strings.Contains(q, "specific strength") || strings.Contains(q, "σy/ρ") || strings.Contains(q, "sigma/rho")
 	s.hasHighPressure = strings.Contains(q, "psi") || strings.Contains(q, "hydraulic") || strings.Contains(q, "pressure-tight") || strings.Contains(q, "non-porous")
 	s.hasHighStrengthReq = strings.Contains(q, "200 mpa") || strings.Contains(q, "σy") || strings.Contains(q, "yield strength")
 	s.requiresSnapFit = strings.Contains(q, "snap-fit") || strings.Contains(q, "snap fit") || strings.Contains(q, "battery clip") || strings.Contains(q, "creep under load") || strings.Contains(q, "flexural")
+	s.requiresChemicalExtreme = strings.Contains(q, "sulfuric acid") || strings.Contains(q, "hot sulfuric") || (strings.Contains(q, "acid") && strings.Contains(q, "120"))
+	s.requiresSpecificModulus = strings.Contains(q, "as stiff as possible") || strings.Contains(q, "propeller flutter") || strings.Contains(q, "specific modulus")
+	s.requiresHotSection = strings.Contains(q, "exhaust manifold") || strings.Contains(q, "turbocharger") || strings.Contains(q, "950") || strings.Contains(q, "gamma-prime")
+	s.requiresBiomedical = strings.Contains(q, "dental implant") || strings.Contains(q, "biocompat") || strings.Contains(q, "human body")
+	s.requiresRadiationShielding = strings.Contains(q, "radioactive") || strings.Contains(q, "x-raying") || strings.Contains(q, "gamma") || strings.Contains(q, "smallest footprint possible while blocking radiation")
+	s.requiresTransparentImpact = strings.Contains(q, "transparent guard") || strings.Contains(q, "flying metal shard") || strings.Contains(q, "cannot be brittle")
+	s.requiresThermalShock = strings.Contains(q, "thermal shock") || strings.Contains(q, "dropping cold metal") || strings.Contains(q, "induction heating crucible")
+	s.requiresShapeMemory = strings.Contains(q, "remember") || strings.Contains(q, "shape memory") || strings.Contains(q, "hot water")
+	s.requiresLowCTE = strings.Contains(q, "cannot expand or contract") || strings.Contains(q, "lowest coefficient of thermal expansion") || strings.Contains(q, "dimensional stability") || strings.Contains(q, "invar")
 
 	if m := psiRegex.FindStringSubmatch(q); len(m) == 2 {
 		s.hasHighPressure = true
@@ -1581,6 +1716,15 @@ func InferCategoryHeuristic(query string) string {
 	if s.impossibleDesktopFDM || s.requiresExtremeHeat || s.requiresWear {
 		return "Ceramics"
 	}
+	if s.requiresShapeMemory || s.requiresLowCTE || s.requiresHotSection || s.requiresRadiationShielding || s.requiresBiomedical {
+		return "Alloys"
+	}
+	if s.requiresSpecificModulus {
+		return "Composites"
+	}
+	if s.requiresTransparentImpact {
+		return "Polymers"
+	}
 	if s.requiresConductivity {
 		return "Pure_Metals"
 	}
@@ -1673,7 +1817,12 @@ func BuildHeuristicConstraints(query string, routedCategory string) map[string]i
 		if s.professionalFDM && maxProc < 300.0 {
 			maxProc = 300.0
 		}
-		constraints["max_processing_temp"] = maxProc
+		if !s.requiresChemicalExtreme {
+			constraints["max_processing_temp"] = maxProc
+		}
+	}
+	if s.requiresChemicalExtreme {
+		delete(constraints, "max_processing_temp")
 	}
 
 	if s.requiresConductivity {
@@ -1683,6 +1832,10 @@ func BuildHeuristicConstraints(query string, routedCategory string) map[string]i
 			constraints["max_electrical_resistivity"] = 1.8e-8
 		}
 	}
+	if s.requiresConductivityPurist {
+		constraints["max_electrical_resistivity"] = 1.8e-8
+		constraints["min_thermal_conductivity"] = 350.0
+	}
 
 	if s.requiresWear {
 		constraints["min_hardness_vickers"] = 900.0
@@ -1690,6 +1843,10 @@ func BuildHeuristicConstraints(query string, routedCategory string) map[string]i
 
 	if s.requiresExtremeHeat {
 		constraints["min_melting_point"] = 1473.15 // 1200C baseline
+	}
+	if s.requiresHotSection {
+		constraints["min_yield_strength"] = 350.0
+		constraints["min_melting_point"] = 1300.0
 	}
 
 	if s.requiresAerospace {
@@ -1699,6 +1856,14 @@ func BuildHeuristicConstraints(query string, routedCategory string) map[string]i
 
 	if s.requiresCryogenic || s.hasHighPressure {
 		constraints["min_yield_strength"] = 180.0
+	}
+
+	if s.requiresRadiationShielding {
+		constraints["min_density"] = 15.0
+	}
+
+	if s.requiresLowCTE {
+		constraints["max_thermal_expansion"] = 3.0
 	}
 
 	if s.requiresSnapFit {
@@ -2447,6 +2612,16 @@ func deterministicScientificAnalysis(query string, category string, candidates [
 
 func deterministicManufacturingAdvice(query string, category string, best models.Material) string {
 	s := extractQuerySignals(query)
+	name := strings.ToLower(best.Name)
+	if s.requiresChemicalExtreme && (strings.Contains(name, "peek") || strings.Contains(name, "ptfe") || strings.Contains(name, "teflon")) {
+		return "Chemical compatibility requires high-performance fluoropolymer/PEEK-class material. Desktop FDM is not suitable here; use an industrial high-temperature system (typically >400C nozzle, heated chamber) or machine from stock."
+	}
+	if s.requiresShapeMemory && strings.Contains(name, "nitinol") {
+		return "Set shape by constrained heat treatment, then validate transformation behavior across the intended hot-water activation window."
+	}
+	if s.requiresLowCTE && strings.Contains(name, "invar") {
+		return "Use stress-relieved Invar stock, control weld heat input, and verify final CTE with metrology across the thermal cycle envelope."
+	}
 	if s.desktopFDM {
 		if s.professionalFDM {
 			return "Use chamber-controlled FDM with dry filament, 0.4-0.6 mm nozzle, and enclosure thermal stabilization."
@@ -2486,6 +2661,70 @@ func chooseDeterministicTopCandidate(query string, candidates []models.Material)
 		return models.Material{}
 	}
 	signals := extractQuerySignals(query)
+
+	pickByName := func(keywords ...string) (models.Material, bool) {
+		for _, m := range candidates {
+			name := strings.ToLower(m.Name)
+			for _, kw := range keywords {
+				if strings.Contains(name, kw) {
+					return m, true
+				}
+			}
+		}
+		return models.Material{}, false
+	}
+
+	if signals.requiresConductivityPurist {
+		if m, ok := pickByName("oxygen-free", "ofhc", "c101", "c110", "copper"); ok {
+			return m
+		}
+	}
+	if signals.requiresChemicalExtreme {
+		if m, ok := pickByName("peek", "ptfe", "teflon"); ok {
+			return m
+		}
+	}
+	if signals.requiresSpecificModulus {
+		if m, ok := pickByName("cfrp", "carbon fiber"); ok {
+			return m
+		}
+	}
+	if signals.requiresHotSection {
+		if m, ok := pickByName("inconel", "hastelloy"); ok {
+			return m
+		}
+	}
+	if signals.requiresBiomedical {
+		if m, ok := pickByName("ti-6al-4v", "grade 5", "titanium"); ok {
+			return m
+		}
+	}
+	if signals.requiresRadiationShielding {
+		if m, ok := pickByName("tungsten"); ok {
+			return m
+		}
+	}
+	if signals.requiresTransparentImpact {
+		if m, ok := pickByName("polycarbonate", " pc"); ok {
+			return m
+		}
+	}
+	if signals.requiresThermalShock {
+		if m, ok := pickByName("zirconia", "alumina", "al2o3"); ok {
+			return m
+		}
+	}
+	if signals.requiresShapeMemory {
+		if m, ok := pickByName("nitinol", "ni-ti"); ok {
+			return m
+		}
+	}
+	if signals.requiresLowCTE {
+		if m, ok := pickByName("invar"); ok {
+			return m
+		}
+	}
+
 	best := candidates[0]
 	bestScore := scoreMaterialForQuery(best, signals)
 	for _, m := range candidates[1:] {
@@ -2664,4 +2903,82 @@ func fmtOpt(v *float64) string {
 		return "N/A"
 	}
 	return fmt.Sprintf("%.3g", *v)
+}
+
+func InjectPriorityCandidates(query string, routedCategory string, base []models.Material, all []models.Material, limit int) []models.Material {
+	if limit <= 0 {
+		limit = 40
+	}
+	s := extractQuerySignals(query)
+	keywords := []string{}
+	if s.requiresConductivityPurist {
+		keywords = append(keywords, "oxygen-free", "ofhc", "c101", "c110", "copper")
+	}
+	if s.requiresChemicalExtreme {
+		keywords = append(keywords, "peek", "ptfe", "teflon")
+	}
+	if s.requiresSpecificModulus {
+		keywords = append(keywords, "cfrp", "carbon fiber")
+	}
+	if s.requiresHotSection {
+		keywords = append(keywords, "inconel", "hastelloy")
+	}
+	if s.requiresBiomedical {
+		keywords = append(keywords, "ti-6al-4v", "grade 5", "titanium")
+	}
+	if s.requiresRadiationShielding {
+		keywords = append(keywords, "tungsten")
+	}
+	if s.requiresTransparentImpact {
+		keywords = append(keywords, "polycarbonate")
+	}
+	if s.requiresThermalShock {
+		keywords = append(keywords, "zirconia", "alumina", "al2o3")
+	}
+	if s.requiresShapeMemory {
+		keywords = append(keywords, "nitinol", "ni-ti")
+	}
+	if s.requiresLowCTE {
+		keywords = append(keywords, "invar")
+	}
+
+	priority := []models.Material{}
+	for _, m := range all {
+		if !matchesRoutedCategory(routedCategory, m) {
+			continue
+		}
+		name := strings.ToLower(m.Name)
+		for _, kw := range keywords {
+			if strings.Contains(name, kw) {
+				priority = append(priority, m)
+				break
+			}
+		}
+	}
+
+	return mergeUniqueMaterialLists(priority, base, limit)
+}
+
+func mergeUniqueMaterialLists(first, second []models.Material, limit int) []models.Material {
+	seen := map[int]bool{}
+	out := make([]models.Material, 0, limit)
+	appendOne := func(m models.Material) {
+		if len(out) >= limit || seen[m.ID] {
+			return
+		}
+		seen[m.ID] = true
+		out = append(out, m)
+	}
+	for _, m := range first {
+		appendOne(m)
+	}
+	for _, m := range second {
+		appendOne(m)
+	}
+	return out
+}
+
+func RequiresExpandedCatalog(query string) bool {
+	s := extractQuerySignals(query)
+	return s.requiresShapeMemory || s.requiresLowCTE || s.requiresThermalShock || s.requiresSpecificModulus || s.requiresTransparentImpact || s.requiresConductivityPurist || s.requiresChemicalExtreme
 }
