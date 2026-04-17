@@ -7,200 +7,146 @@ sdk: docker
 pinned: false
 ---
 
-# Smart Alloy Selector - Tech Titans
+# Smart Alloy Selector
 
-AI-powered material recommendation and alloy prediction platform built for **MET-QUEST '26**.
-
-The project combines a Go/Gin backend, a React/Vite frontend, modular materials CSV catalogs, optional PostgreSQL storage, and Gemini-powered analysis to act like a virtual materials scientist for engineering design queries.
+Met-Quest '26 material recommendation workspace with a Go backend and a React/Firebase frontend. The current UI is chat-first: a session sidebar on the left, a single conversation surface in the center, and a compact composer at the bottom.
 
 ## Live Links
 
-- **Frontend:** [met-quest.web.app](https://met-quest.web.app)
-- **API:** [vivekwa-met-quest-api.hf.space](https://vivekwa-met-quest-api.hf.space)
-- **Health check:** [vivekwa-met-quest-api.hf.space/health](https://vivekwa-met-quest-api.hf.space/health)
+- Frontend: https://met-quest.web.app
+- API: https://vivekwa-met-quest-api.hf.space
+- Health check: https://vivekwa-met-quest-api.hf.space/health
 
-## What It Does
+## What the App Does
 
-- Recommends materials from natural-language engineering requirements.
-- Routes advanced queries through a category-aware dispatcher for polymers, alloys, pure metals, ceramics, and composites.
-- Uses hybrid retrieval: domain-specific hard filters + semantic vector similarity for better candidate recall.
-- Runs physics-focused verification before returning the final recommendation.
-- Applies query-signal safeguards for desktop FDM, nozzle limits, enclosures, service temperature, damping, CNC, cryogenic, and high-pressure requests.
-- Uses deterministic fallback ranking when an LLM response is unavailable, incomplete, or returns too few catalog IDs.
-- Predicts custom alloy properties from element composition using rule-of-mixtures plus LLM refinement.
-- Loads the materials catalog from local CSV files by default, with optional Neon/PostgreSQL support.
-- Falls back gracefully when Postgres or an LLM provider is unavailable.
-- Supports Gemini embeddings with pgvector schema support (`material_embeddings`) and in-memory vector fallback when embeddings are unavailable.
+- Lets you ask material-selection questions in plain language.
+- Returns a ranked recommendation response with a generated report.
+- Keeps chat sessions in local storage so conversations persist across reloads.
+- Supports follow-up turns in the same chat thread through a dedicated chat endpoint that uses the existing question/answer context.
+- Shows the top recommendation, shortlist, and report text in a compact conversational layout.
+- Includes optional copy and report expand controls on assistant messages.
+- Deploys the frontend through Firebase Hosting.
 
-## Current Architecture
+## Current UI
+
+The frontend is intentionally minimal now:
+
+- Left sidebar for saved sessions.
+- Main chat transcript area.
+- Bottom message composer with send button only.
+- No constraints panel in the current UI.
+- No extra workflow buttons beyond new chat, session selection, and send.
+
+## Architecture Overview
 
 ```mermaid
 graph TD
-    User([User]) --> Frontend[React + Vite Frontend]
+    User([User]) --> Frontend[React + Vite Chat UI]
     Frontend --> API[Go + Gin API]
-    API --> CSV[(Modular In-Memory CSV Catalog)]
+    API --> Recommend[POST /api/v1/recommend]
+    API --> FollowUp[POST /api/v1/chat/followup]
+    API --> Health[GET /health]
+    API --> CSV[(CSV Material Catalog)]
     API --> PG[(Optional PostgreSQL / Neon)]
-    API --> Legacy[Long-Context Recommender]
-    Legacy --> Signals[Physics-Aware Query Signals]
-    Signals --> Fallbacks[Deterministic Ranking + Feasibility Filters]
-    API --> Dispatcher[Category Dispatcher]
-    Dispatcher --> Search[Specialized Physics Search]
-    Search --> Vector[Hybrid Vector Retrieval]
-    Search --> Analysis[Scientific Verification]
-    Vector --> Analysis
-    API --> Predictor[Alloy Predictor]
-    API --> LLM[Google Gemini / OpenRouter Fallback]
-    Analysis --> Response[Recommendation Report]
-    Fallbacks --> Response
-    Predictor --> Response
+    API --> Dispatcher[Dispatcher / Physics Verification]
+    Dispatcher --> Report[Recommendation Report]
+    FollowUp --> Report
 ```
 
-## API Surface
+## Frontend Flow
+
+The frontend uses a simple chat flow:
+
+1. The first user message is sent to `POST /api/v1/recommend`.
+2. The assistant response is stored in the active session.
+3. Later turns are sent to `POST /api/v1/chat/followup` with recent history and the first answer so the chat stays conversational instead of rerunning the full pipeline.
+4. The session history sidebar lets you switch between conversations.
+
+### UI Behavior
+
+- The interface is intentionally simple and chat-first.
+- The old constraints panel is no longer part of the main flow.
+- The UI keeps only the actions that are still useful: new chat, session selection, message input, send, copy, and expand/collapse report.
+- The sidebar can be used to switch between saved sessions, while the main area stays focused on the conversation.
+
+### Frontend Files
+
+- `frontend/src/App.tsx`: app shell, sidebar, API status, session selection, and message submission.
+- `frontend/src/components/ChatPanel.tsx`: transcript renderer, empty state, composer, copy/expand controls.
+- `frontend/src/components/ChatHistory.tsx`: session list and new-chat action.
+- `frontend/src/api/client.ts`: recommend, follow-up chat, and health helpers.
+- `frontend/src/hooks/useChatStorage.ts`: localStorage-backed session persistence.
+
+## Backend API Surface
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | API liveness check. |
-| `POST` | `/api/v1/recommend` | Legacy long-context material recommendation endpoint used by the current frontend. |
-| `POST` | `/api/v1/recommend/dispatcher` | New category-aware dispatcher with specialized search and physics verification. |
-| `POST` | `/api/v1/predict` | Custom alloy composition prediction. |
+| `GET` | `/health` | Liveness check. |
+| `POST` | `/api/v1/recommend` | Material recommendation request used for the first assistant response. |
+| `POST` | `/api/v1/chat/followup` | Follow-up assistant chat response using prior conversation context. |
+| `POST` | `/api/v1/recommend/dispatcher` | Dispatcher and physics-verification flow used by backend validation and advanced routing. |
+| `POST` | `/api/v1/predict` | Alloy composition prediction. |
 
 ### Recommendation Request
 
 ```json
 {
   "query": "Need a lightweight alloy for aircraft wing components with fatigue resistance",
-  "domain": "Aerospace & Aviation"
+  "domain": "Overall (Top 1000)"
 }
 ```
 
-### Alloy Prediction Request
+### Follow-up Request
 
 ```json
 {
-  "composition": {
-    "Al": 90,
-    "Zn": 6,
-    "Mg": 2,
-    "Cu": 2
-  }
+  "message": "Can you narrow it to something with better corrosion resistance?",
+  "history": [
+    { "role": "user", "content": "Need a lightweight alloy for aircraft wing components with fatigue resistance" },
+    { "role": "assistant", "content": "..." }
+  ],
+  "initial_report": "...",
+  "top_recommendations": ["7075 Aluminum", "Ti-6Al-4V", "2024 Aluminum"]
 }
 ```
 
-## Backend Highlights
+## Backend Summary
 
-The backend lives in [`backend/`](backend/) and is written in Go.
+The backend lives in `backend/` and is written in Go.
 
-- [`backend/main.go`](backend/main.go): starts the Gin server, loads environment variables, connects to Postgres when available, loads the CSV catalog, configures CORS, and registers routes.
-- [`backend/handlers/recommend.go`](backend/handlers/recommend.go): contains both the legacy recommendation handler and the new dispatcher handler.
-- [`backend/handlers/predict.go`](backend/handlers/predict.go): validates alloy composition requests and calls the predictor service.
-- [`backend/services/llm.go`](backend/services/llm.go): provider-aware Gemini/OpenRouter calls, intent extraction, long-context analysis, query-signal extraction, fallback ranking, desktop-print feasibility filtering, dispatcher routing, specialized search, and scientific analysis.
-- [`backend/services/vector.go`](backend/services/vector.go): semantic vector retrieval using Gemini embeddings when available and deterministic hashed-vector fallback when offline.
-- [`backend/services/csv_db.go`](backend/services/csv_db.go): loads modular CSV catalogs into memory for fast local and production fallback searches.
-- [`backend/services/predictor.go`](backend/services/predictor.go): computes rule-of-mixtures baselines and asks the LLM for thermodynamic refinement.
-- [`backend/db/postgres.go`](backend/db/postgres.go): optional PostgreSQL connection pool with mock-mode fallback.
+- `backend/main.go`: starts the Gin server, loads environment variables, configures routes, CORS, and optional Postgres.
+- `backend/handlers/recommend.go`: material recommendation and dispatcher handlers.
+- `backend/handlers/predict.go`: alloy prediction endpoint.
+- `backend/services/llm.go`: recommendation, follow-up, dispatcher, and analysis logic.
+- `backend/services/vector.go`: hybrid retrieval support.
+- `backend/services/csv_db.go`: CSV catalog loader and fallback search.
+- `backend/services/predictor.go`: rule-of-mixtures and prediction refinement.
+- `backend/db/postgres.go`: optional PostgreSQL connection handling.
 
-### LLM Provider Behavior
+## Data Sources
 
-The backend prefers a valid `GEMINI_API_KEY` and can also use `OPENROUTER_API_KEY`.
+The app is CSV-first and can run without a database.
 
-Provider flow:
-
-1. Google AI Studio Gemini models are tried first.
-2. Temporary quota and availability failures are tracked with model-level backoff.
-3. OpenRouter is used as a fallback when a valid OpenRouter key is present.
-4. If no valid key exists, the service returns mock AI responses where supported so local development still works.
-
-## Dispatcher Pipeline
-
-The dispatcher endpoint is the validation-focused recommendation flow. It is designed so the LLM explains and verifies the decision, while deterministic Go guardrails enforce manufacturing feasibility and first-pass physics.
-
-Input-to-output flow:
-
-1. The user submits a natural-language query to `/api/v1/recommend/dispatcher`.
-2. `RouteQuery()` asks the LLM to classify the request into `Polymers`, `Alloys`, `Pure_Metals`, `Ceramics`, or `Composites`.
-3. `InferCategoryHeuristic()` and route guardrails correct obvious LLM mistakes, such as desktop FDM requests being routed to metals, cryogenic CNC requests being routed to polymers, or conductivity requests being routed to alloys instead of pure metals.
-4. The backend loads materials from Postgres when available, otherwise from the in-memory CSV catalog.
-5. `ExtractIntent()` asks the LLM to convert service requirements and hardware limits into structured filters. Celsius service temperatures are converted to Kelvin before comparing against catalog properties such as `glass_transition_temp`, `heat_deflection_temp`, and `melting_point`.
-6. Category-specific search scans the full category, applies hard filters, ranks all valid candidates using engineering scores, and only then returns the top candidates.
-7. `ScientificAnalysis()` asks the LLM to verify the short list with first-principles reasoning, merit-index calculations, rejection notes, manufacturing advice, and safety margins.
-8. `chooseDeterministicTopCandidate()` re-scores the analyzed candidates and enforces the final top choice so the model cannot recommend a material that violates the process or physics gate.
-9. The handler maps the selected name back to a real catalog material and returns the top recommendation, alternatives, physics analysis, and pipeline explanation.
-
-Important prompt and guardrail behavior:
-
-- Desktop FDM is a hard manufacturing gate. If the user says Ender 3, Prusa, hobby printer, desktop printer, FDM, or plastic filament, the route is locked to printable polymer/composite candidates.
-- Hobby FDM rejects or heavily penalizes materials that need high-temperature enclosed hardware, such as PEEK, Ultem/PEI, and enclosure-sensitive ABS.
-- PETG is boosted for the common middle-ground case where PLA is too close to its glass transition temperature but ABS or PEEK is not practical on an open desktop printer.
-- PLA is boosted for indoor aesthetic scale models where surface finish, dimensional stability, and fast printing matter more than heat resistance.
-- Professional FDM queries with a heated chamber and high nozzle capability can select high-Tg engineering polymers such as polycarbonate.
-- Cryogenic, pressure-tight, CNC, and non-porous requirements route toward alloys, with aluminum alloys favored for ductility at low temperature.
-- Maximum electrical or thermal conductivity routes toward pure metals, with copper favored over alloys because alloying increases electron and phonon scattering.
-- Abrasive wear, furnace, viewport, and extreme-temperature requirements route toward ceramics such as alumina, silicon carbide, or zirconia.
-- Physically impossible desktop-FDM requests, such as plastic filament at rocket-nozzle temperatures, return `NO_FEASIBLE_MATERIAL` instead of a misleading recommendation.
-
-This dispatcher path is the best endpoint for the MET-QUEST validation cases covering PETG, PLA, PC, aluminum alloys, TPU-like damping materials, ceramics, copper, PTFE/PEEK chemical resistance, and hard rejection cases.
-
-## Recommendation Reliability
-
-Both recommendation paths use extra validation around the LLM result:
-
-1. `extractQuerySignals()` detects important manufacturing and service constraints such as desktop FDM, professional heated chambers, nozzle temperature caps, continuous service temperature, vibration damping, CNC machining, cryogenic use, hydraulic pressure, and high-strength requirements.
-2. `LongContextAnalyze()` still asks the LLM to reason over a compact material catalog, but it no longer trusts the model blindly.
-3. If the LLM returns missing IDs, invented IDs, invalid JSON, or too few candidates, `inferFallbackRecommendedIDs()` and `ensureMinimumRecommendedIDs()` fill the result using deterministic material scoring.
-4. `rerankRecommendedIDs()` reorders candidates against the extracted physics signals.
-5. `applyDesktopFeasibilityFilter()` removes desktop-FDM-infeasible picks such as wrong material classes, excessive processing temperature, excessive thermal expansion, or poor heat margin.
-6. Impossible desktop-FDM requests, such as high-pressure manifolds or extreme-temperature service, return an explicit process-feasibility warning instead of a misleading material recommendation.
-
-This layer keeps the UI table populated with practical alternatives while still allowing the LLM to write the engineering narrative.
-
-More detail is available in:
-
-- [`DISPATCHER_IMPLEMENTATION.md`](DISPATCHER_IMPLEMENTATION.md)
-- [`DISPATCHER_QUICK_REFERENCE.md`](DISPATCHER_QUICK_REFERENCE.md)
-- [`DISPATCHER_SUMMARY.md`](DISPATCHER_SUMMARY.md)
-- [`IMPLEMENTATION_VERIFICATION.md`](IMPLEMENTATION_VERIFICATION.md)
-
-## Frontend
-
-The frontend lives in [`frontend/`](frontend/) and uses React, TypeScript, Vite, and Axios.
-
-- [`frontend/src/App.tsx`](frontend/src/App.tsx): main two-tab application shell for material recommendation and alloy prediction.
-- [`frontend/src/components/QueryInput.tsx`](frontend/src/components/QueryInput.tsx): natural-language material query form.
-- [`frontend/src/components/PredictorPanel.tsx`](frontend/src/components/PredictorPanel.tsx): custom alloy composition workflow.
-- [`frontend/src/components/ReportCard.tsx`](frontend/src/components/ReportCard.tsx): renders the virtual scientist report.
-- [`frontend/src/components/PropertyTable.tsx`](frontend/src/components/PropertyTable.tsx): compares returned material properties.
-- [`frontend/src/api/client.ts`](frontend/src/api/client.ts): API client. Defaults to the Hugging Face backend and supports `VITE_API_URL` overrides.
-
-## Data Pipeline
-
-The data layer is CSV-first, with optional database sync.
-
-| Path | Purpose |
-| --- | --- |
-| [`data/materials_cleaned.csv`](data/materials_cleaned.csv) | Full cleaned catalog fallback. |
-| [`data/polymers.csv`](data/polymers.csv) | Polymer catalog. |
-| [`data/metals.csv`](data/metals.csv) | Metal and alloy catalog. |
-| [`data/ceramics.csv`](data/ceramics.csv) | Ceramic catalog. |
-| [`data/composites.csv`](data/composites.csv) | Composite catalog. |
-| [`data/schema.sql`](data/schema.sql) | PostgreSQL schema. |
-| [`data/seed_db.py`](data/seed_db.py) | Bulk CSV to Postgres loader. |
-| [`data/fetch_materials.py`](data/fetch_materials.py) | Materials Project ingestion helper. |
-| [`data/analyze_dataset.py`](data/analyze_dataset.py) | Null-rate + benchmark coverage audit for scraped/API data quality. |
-
-The backend also contains deployment-ready copies under [`backend/data/`](backend/data/) for Docker/Hugging Face packaging.
+- `data/materials_cleaned.csv`: full material catalog.
+- `data/polymers.csv`: polymer subset.
+- `data/metals.csv`: metal and alloy subset.
+- `data/ceramics.csv`: ceramic subset.
+- `data/composites.csv`: composite subset.
+- `data/schema.sql`: PostgreSQL schema.
+- `data/seed_db.py`: optional loader.
 
 ## Local Setup
 
 ### Prerequisites
 
-- Go 1.24 or compatible with the module in [`backend/go.mod`](backend/go.mod)
+- Go 1.24 or compatible with `backend/go.mod`
 - Node.js and npm
-- Optional: Python 3 for data ingestion scripts
+- Optional: Python 3 for data scripts
 - Optional: Firebase CLI for frontend deployment
 
 ### Environment Variables
 
-Create `.env` in the project root when running locally:
+Create `.env` in the project root:
 
 ```env
 GEMINI_API_KEY=your_google_ai_studio_key
@@ -208,9 +154,10 @@ OPENROUTER_API_KEY=your_openrouter_key
 DATABASE_URL=postgres_connection_string_optional
 ALLOWED_ORIGINS=http://localhost:5173,https://met-quest.web.app
 PORT=8080
+VITE_API_URL=http://localhost:8080/api/v1
 ```
 
-Only one valid LLM key is required. `GEMINI_API_KEY` is preferred. `DATABASE_URL` is optional because the backend can run from CSV alone.
+`GEMINI_API_KEY` is preferred. `DATABASE_URL` is optional because the backend can run from CSV data alone.
 
 ### Run Backend
 
@@ -219,20 +166,12 @@ cd backend
 go run main.go
 ```
 
-The API starts on `http://localhost:8080` unless `PORT` is set.
-
 ### Run Frontend
 
 ```bash
 cd frontend
 npm install
 npm run dev
-```
-
-For local frontend-to-local-backend calls, set:
-
-```env
-VITE_API_URL=http://localhost:8080/api/v1
 ```
 
 ## Testing
@@ -251,101 +190,44 @@ cd frontend
 npm run build
 ```
 
-### Dispatcher API Test Suite
-
-Start the backend first, then run:
+### Dispatcher Validation
 
 ```bash
-./test_dispatcher.sh
+./test_dispatcher_validation.sh
 ```
 
-### Strategic Hackathon Validation (10 Cases)
-
-This suite validates the requested Pareto, hardware, cryogenic, conductivity, and rejection scenarios:
+### Hackathon Validation
 
 ```bash
 ./test_hackathon_cases.sh
 ```
 
-Expected result: `Passed: 10` and `Failed: 0`.
-
-### Data Quality Audit
-
-To analyze scraped/API dataset completeness and benchmark-material coverage:
-
-```bash
-python3 data/analyze_dataset.py
-```
-
-The script exercises polymer, alloy, ceramic, composite, pure-metal, and edge-case queries against `/api/v1/recommend/dispatcher`.
-
-## Optional Database Workflow
-
-The app runs without Postgres, but a database can be used for production-scale querying.
-
-```bash
-cd data
-python3 -m pip install -r requirements.txt
-python3 seed_db.py
-```
-
-Set `DATABASE_URL` before running the seed script or backend.
+Expected result: `Passed: 10`, `Failed: 0`.
 
 ## Deployment
 
-### Backend: Hugging Face Spaces
+### Firebase Hosting
 
-The root [`Dockerfile`](Dockerfile) and backend [`backend/Dockerfile`](backend/Dockerfile) support container deployment. The public API is currently hosted as a Hugging Face Docker Space.
-
-Required secret:
-
-```env
-GEMINI_API_KEY=your_key
-```
-
-Optional secrets:
-
-```env
-OPENROUTER_API_KEY=your_key
-DATABASE_URL=your_postgres_url
-ALLOWED_ORIGINS=https://met-quest.web.app
-```
-
-### Frontend: Firebase Hosting
-
-Build and deploy the Vite app when frontend files change:
+The frontend is deployed from `frontend/dist` using the Firebase Hosting rewrite configured in `firebase.json`.
 
 ```bash
 cd frontend
 npm run build
 cd ..
-firebase deploy --only hosting
+npx -y firebase-tools@latest deploy --only hosting
 ```
 
-Firebase hosting is configured in [`firebase.json`](firebase.json).
+### Backend
 
-Backend production updates are deployed through the Hugging Face Spaces remote. Frontend production updates are deployed through Firebase Hosting.
+The API is deployed separately through the Hugging Face Space / Docker workflow documented in `DEPLOYMENT.md`.
 
-Recommended backend production push workflow:
+## Notes
 
-```bash
-git push hf main
-git ls-remote hf refs/heads/main
-```
-
-After deployment, verify:
-
-```bash
-curl -s https://vivekwa-met-quest-api.hf.space/health
-```
-
-## Project Notes
-
-- The frontend currently calls the legacy `/recommend` endpoint for the recommender tab.
-- The new dispatcher endpoint is implemented and testable through `/recommend/dispatcher`.
-- The CSV catalog is the default operational source, so local development does not require a database.
-- The recommender now guarantees practical fallback candidates for normal cases and returns a no-recommendation warning for physically impossible desktop-FDM requests.
-- Generated artifacts such as `backend/server`, logs, and Firebase cache files may appear after builds or deployments.
+- The current frontend does not use the old constraints panel.
+- Chat sessions are stored locally in the browser.
+- The app is designed to keep the UI simple: sessions, chat, and send.
+- Follow-up replies use chat context, so they should read like a normal assistant response rather than a repeated pipeline report.
+- If you change the API URL, update `VITE_API_URL` before building the frontend.
 
 ## Team
 
