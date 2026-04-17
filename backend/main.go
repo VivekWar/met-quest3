@@ -85,6 +85,9 @@ func main() {
 
 		// POST /api/v1/predict — custom alloy composition → LLM-enhanced prediction
 		v1.POST("/predict", handlers.Predict)
+
+		// POST /api/v1/chat/followup — conversational follow-up after initial recommendation
+		v1.POST("/chat/followup", handlers.ChatFollowUp)
 	}
 
 	// ── Start server ───────────────────────────────────────────────────
@@ -97,6 +100,7 @@ func main() {
 	log.Printf("    POST /api/v1/recommend              — Material recommendation (legacy)")
 	log.Printf("    POST /api/v1/recommend/dispatcher   — Material recommendation (dispatcher + physics)")
 	log.Printf("    POST /api/v1/predict                — Custom alloy prediction")
+	log.Printf("    POST /api/v1/chat/followup          — Conversational follow-up chat")
 	log.Printf("    GET  /health                        — Liveness check")
 
 	if err := r.Run(":" + port); err != nil {

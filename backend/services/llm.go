@@ -242,6 +242,71 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 	return "", 0, fmt.Errorf("%s%s (Keys checked - Google: %v, OpenRouter: %v)", detailedErr, skipReason, activeGoogleKey != "", validOR)
 }
 
+// callGeminiText is a conversational text call that does not enforce JSON-only output.
+func callGeminiText(ctx context.Context, prompt string, temperature float64, maxTokens int) (string, int, error) {
+	googleKey := os.Getenv("GEMINI_API_KEY")
+	openRouterKey := os.Getenv("OPENROUTER_API_KEY")
+
+	validGoogle := googleKey != "" && !strings.Contains(googleKey, "Dummy") && !strings.Contains(googleKey, "your_")
+	validOR := openRouterKey != "" && !strings.Contains(openRouterKey, "Dummy") && !strings.Contains(openRouterKey, "your_")
+
+	if !validGoogle && !validOR {
+		return "I can help with follow-up reasoning. Share what you want to refine and I will respond conversationally.", 30, nil
+	}
+
+	var lastErr error
+
+	activeGoogleKey := ""
+	if strings.HasPrefix(googleKey, "AIza") {
+		activeGoogleKey = googleKey
+	} else if strings.HasPrefix(openRouterKey, "AIza") {
+		activeGoogleKey = openRouterKey
+	} else if validGoogle {
+		activeGoogleKey = googleKey
+	}
+
+	if activeGoogleKey != "" {
+		googleModels := []string{
+			"gemini-3.1-flash-lite-preview",
+			"gemini-3-flash-preview",
+			"gemini-2.5-flash",
+		}
+		for _, model := range googleModels {
+			if skip, _ := shouldSkipModel(model); skip {
+				continue
+			}
+			text, tokens, status, err := callGoogleAIText(ctx, activeGoogleKey, model, prompt, temperature, maxTokens, "v1beta")
+			if status == http.StatusNotFound {
+				text, tokens, status, err = callGoogleAIText(ctx, activeGoogleKey, model, prompt, temperature, maxTokens, "v1")
+			}
+			if err == nil {
+				clearModelBackoff(model)
+				return strings.TrimSpace(text), tokens, nil
+			}
+			lastErr = err
+			if status == http.StatusTooManyRequests {
+				markModelBackoff(model, 20*time.Second)
+			}
+			if status == http.StatusUnauthorized {
+				break
+			}
+		}
+	}
+
+	if validOR && !strings.HasPrefix(openRouterKey, "AIza") {
+		text, tokens, _, err := callOpenRouter(ctx, openRouterKey, prompt, temperature, maxTokens)
+		if err == nil {
+			return strings.TrimSpace(text), tokens, nil
+		}
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return "", 0, fmt.Errorf("chat text providers failed: %w", lastErr)
+	}
+	return "", 0, fmt.Errorf("chat text providers unavailable")
+}
+
 func isCompleteJSONObject(raw string) bool {
 	cleaned := cleanJSON(raw)
 	if cleaned == "" {
@@ -1345,10 +1410,10 @@ func extractQuerySignals(query string) querySignals {
 	s.requiresConductivity = strings.Contains(q, "conductivity") || strings.Contains(q, "conductive") || strings.Contains(q, "busbar") || strings.Contains(q, "heat sink") || strings.Contains(q, "led array")
 	s.requiresConductivityPurist = strings.Contains(q, "absolute highest thermal conductivity") || strings.Contains(q, "absolute highest conductivity") || strings.Contains(q, "ofhc") || strings.Contains(q, "oxygen-free")
 	s.requiresWear = strings.Contains(q, "wear") || strings.Contains(q, "abrasive") || strings.Contains(q, "friction") || strings.Contains(q, "slurry") || strings.Contains(q, "abrasive nozzle")
-	s.requiresExtremeHeat = strings.Contains(q, "furnace") || strings.Contains(q, "rocket nozzle") || strings.Contains(q, "1200") || strings.Contains(q, "2000")
+	s.requiresExtremeHeat = strings.Contains(q, "furnace") || strings.Contains(q, "rocket nozzle") || strings.Contains(q, "combustor") || strings.Contains(q, "1200") || strings.Contains(q, "2000") || strings.Contains(q, "3000")
 	s.requiresAerospace = strings.Contains(q, "aerospace") || strings.Contains(q, "uav") || strings.Contains(q, "drone racing") || strings.Contains(q, "wing spar") || strings.Contains(q, "strength-to-weight") || strings.Contains(q, "specific strength") || strings.Contains(q, "σy/ρ") || strings.Contains(q, "sigma/rho")
-	s.hasHighPressure = strings.Contains(q, "psi") || strings.Contains(q, "hydraulic") || strings.Contains(q, "pressure-tight") || strings.Contains(q, "non-porous")
-	s.hasHighStrengthReq = strings.Contains(q, "200 mpa") || strings.Contains(q, "σy") || strings.Contains(q, "yield strength")
+	s.hasHighPressure = strings.Contains(q, "psi") || strings.Contains(q, "hydraulic") || strings.Contains(q, "pressure-tight") || strings.Contains(q, "non-porous") || strings.Contains(q, "mpa pressure")
+	s.hasHighStrengthReq = strings.Contains(q, "200 mpa") || strings.Contains(q, "σy") || strings.Contains(q, "yield strength") || strings.Contains(q, "high strength")
 	s.requiresSnapFit = strings.Contains(q, "snap-fit") || strings.Contains(q, "snap fit") || strings.Contains(q, "battery clip") || strings.Contains(q, "creep under load") || strings.Contains(q, "flexural")
 	s.requiresChemicalExtreme = strings.Contains(q, "sulfuric acid") || strings.Contains(q, "hot sulfuric") || (strings.Contains(q, "acid") && strings.Contains(q, "120"))
 	s.requiresSpecificModulus = strings.Contains(q, "as stiff as possible") || strings.Contains(q, "propeller flutter") || strings.Contains(q, "specific modulus")
@@ -1366,6 +1431,7 @@ func extractQuerySignals(query string) querySignals {
 
 	maxTemp := -1e9
 	maxServiceTemp := -1e9
+	nozzleTemp := -1e9
 	tempMatches := append(tempCRegex.FindAllStringSubmatch(q, -1), latexTempCRegex.FindAllStringSubmatch(q, -1)...)
 	for _, m := range tempMatches {
 		if len(m) != 2 {
@@ -1375,6 +1441,10 @@ func extractQuerySignals(query string) querySignals {
 		if _, err := fmt.Sscanf(m[1], "%f", &t); err == nil {
 			if t > maxTemp {
 				maxTemp = t
+			}
+			// Detect nozzle-specific temperatures for FDM
+			if t > 220 && t < 350 && strings.Contains(q, "nozzle") {
+				nozzleTemp = t
 			}
 			if t <= 200 && t > maxServiceTemp {
 				maxServiceTemp = t
@@ -1397,7 +1467,9 @@ func extractQuerySignals(query string) querySignals {
 
 	if strings.Contains(q, "nozzle") {
 		s.hasNozzleCap = true
-		if strings.Contains(q, "<260") || strings.Contains(q, "under 260") {
+		if nozzleTemp > 0 {
+			s.nozzleCapC = nozzleTemp
+		} else if strings.Contains(q, "<260") || strings.Contains(q, "under 260") {
 			s.nozzleCapC = 260
 		} else if strings.Contains(q, "300") {
 			s.nozzleCapC = 300
@@ -1406,10 +1478,18 @@ func extractQuerySignals(query string) querySignals {
 		}
 	}
 
+	// CRITICAL GUARDRAIL: Detect impossible desktop FDM scenarios
 	if s.desktopFDM {
+		// Reject: Desktop FDM + Rocket nozzle temperatures (>1500°C is impossible)
+		hasRocketTemp := strings.Contains(q, "2000") || strings.Contains(q, "1800") || strings.Contains(q, "1600") ||
+			(strings.Contains(q, "combustor") && (maxTemp > 1200 || strings.Contains(q, "rocket")))
+		hasRocketKeyword := strings.Contains(q, "rocket nozzle") || strings.Contains(q, "combustion chamber") || strings.Contains(q, "rocket engine")
+
 		requiredTemp := s.hasServiceTemp && s.serviceTempC >= 350
 		requiredPressure := s.hasHighPressure && (strings.Contains(q, "valve") || strings.Contains(q, "manifold"))
-		s.impossibleDesktopFDM = requiredTemp || requiredPressure
+		requiredExtreme := hasRocketTemp || hasRocketKeyword
+
+		s.impossibleDesktopFDM = requiredTemp || requiredPressure || requiredExtreme
 	}
 
 	return s
@@ -1655,6 +1735,60 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 	return result.Candidates[0].Content.Parts[0].Text, result.UsageMetadata.TotalTokenCount, resp.StatusCode, nil
 }
 
+func callGoogleAIText(ctx context.Context, apiKey string, model string, prompt string, temperature float64, maxTokens int, apiVer string) (string, int, int, error) {
+	baseURL := fmt.Sprintf("https://generativelanguage.googleapis.com/%s/models/%s:generateContent", apiVer, model)
+	url := fmt.Sprintf("%s?key=%s", baseURL, apiKey)
+
+	payload := googleAIRequest{
+		Contents: []struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		}{
+			{
+				Parts: []struct {
+					Text string `json:"text"`
+				}{
+					{Text: prompt},
+				},
+			},
+		},
+		GenerationConfig: struct {
+			Temperature      float64 `json:"temperature"`
+			MaxOutputTokens  int     `json:"maxOutputTokens"`
+			ResponseMimeType string  `json:"responseMimeType,omitempty"`
+			ResponseSchema   any     `json:"responseSchema,omitempty"`
+		}{
+			Temperature:     temperature,
+			MaxOutputTokens: maxTokens,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", 0, resp.StatusCode, fmt.Errorf("status %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result googleAIResponse
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+		return "", 0, resp.StatusCode, fmt.Errorf("empty response")
+	}
+
+	return result.Candidates[0].Content.Parts[0].Text, result.UsageMetadata.TotalTokenCount, resp.StatusCode, nil
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 //  DISPATCHER LOGIC: LLM-Powered Material Category Router
 // ──────────────────────────────────────────────────────────────────────────
@@ -1713,8 +1847,11 @@ func InferCategoryHeuristic(query string) string {
 	q := strings.ToLower(query)
 	s := extractQuerySignals(query)
 
-	if s.impossibleDesktopFDM || s.requiresExtremeHeat || s.requiresWear {
-		return "Ceramics"
+	if s.impossibleDesktopFDM {
+		return "Polymers"
+	}
+	if strings.Contains(q, "polymer") || strings.Contains(q, "plastic") || strings.Contains(q, "resin") || strings.Contains(q, "rubber") || strings.Contains(q, "flexible") || strings.Contains(q, "gasket") || strings.Contains(q, "printing") || strings.Contains(q, "peek") || strings.Contains(q, "nylon") {
+		return "Polymers"
 	}
 	if s.requiresShapeMemory || s.requiresLowCTE || s.requiresHotSection || s.requiresRadiationShielding || s.requiresBiomedical {
 		return "Alloys"
@@ -1725,14 +1862,20 @@ func InferCategoryHeuristic(query string) string {
 	if s.requiresTransparentImpact {
 		return "Polymers"
 	}
+	if strings.Contains(q, "polymer") || strings.Contains(q, "plastic") || strings.Contains(q, "resin") || strings.Contains(q, "rubber") || strings.Contains(q, "flexible") || strings.Contains(q, "gasket") || strings.Contains(q, "printing") || strings.Contains(q, "peek") || strings.Contains(q, "nylon") {
+		return "Polymers"
+	}
 	if s.requiresConductivity {
 		return "Pure_Metals"
 	}
 	if s.requiresCryogenic || s.requiresCNC || s.hasHighPressure {
 		return "Alloys"
 	}
-	if s.requiresAerospace {
+	if strings.Contains(q, "composite") || strings.Contains(q, "cfrp") || strings.Contains(q, "gfrp") || strings.Contains(q, "interlaminar") || strings.Contains(q, "fiber") || strings.Contains(q, "laminate") {
 		return "Composites"
+	}
+	if s.requiresAerospace {
+		return "Alloys"
 	}
 	if s.requiresDamping || s.requiresChemical {
 		return "Polymers"
@@ -1747,17 +1890,14 @@ func InferCategoryHeuristic(query string) string {
 	if strings.Contains(q, "conductivity") || strings.Contains(q, "conductive") || strings.Contains(q, "busbar") || strings.Contains(q, "heat sink") || strings.Contains(q, "machined from a block") && strings.Contains(q, "thermal") {
 		return "Pure_Metals"
 	}
+	if s.requiresWear || strings.Contains(q, "wear") || strings.Contains(q, "abrasive") || strings.Contains(q, "friction") || strings.Contains(q, "slurry") || strings.Contains(q, "high hardness") {
+		return "Ceramics"
+	}
 	if strings.Contains(q, "cryogenic") || strings.Contains(q, "liquid nitrogen") || strings.Contains(q, "liquid oxygen") || strings.Contains(q, "lox") || strings.Contains(q, "-196") || strings.Contains(q, "-150") {
 		return "Alloys"
 	}
 	if strings.Contains(q, "furnace") || strings.Contains(q, "viewport") || strings.Contains(q, "abrasive slurry") || strings.Contains(q, "extreme friction") || strings.Contains(q, "high-wear") || strings.Contains(q, "1200") || strings.Contains(q, "2000") {
 		return "Ceramics"
-	}
-	if strings.Contains(q, "composite") || strings.Contains(q, "cfrp") || strings.Contains(q, "gfrp") || strings.Contains(q, "interlaminar") || strings.Contains(q, "fiber") || strings.Contains(q, "laminate") {
-		return "Composites"
-	}
-	if strings.Contains(q, "polymer") || strings.Contains(q, "plastic") || strings.Contains(q, "resin") || strings.Contains(q, "rubber") || strings.Contains(q, "flexible") || strings.Contains(q, "gasket") || strings.Contains(q, "printing") || strings.Contains(q, "pla") || strings.Contains(q, "peek") || strings.Contains(q, "nylon") {
-		return "Polymers"
 	}
 	if strings.Contains(q, "ceramic") || strings.Contains(q, "carbide") || strings.Contains(q, "nitride") || strings.Contains(q, "oxide") || strings.Contains(q, "thermal shock") || strings.Contains(q, "al2o3") || strings.Contains(q, "sic") {
 		return "Ceramics"
@@ -2371,39 +2511,58 @@ func genericPureMetalSearchScore(m models.Material) float64 {
 //  SCIENTIFIC ANALYSIS: First-Principles Physics Verification
 // ──────────────────────────────────────────────────────────────────────────
 
-const scientificAnalysisSystemPrompt = `### ROLE: Principal Materials Scientist
-### PHILOSOPHY: Pareto Optimization (Performance vs. Feasibility)
+const scientificAnalysisSystemPrompt = `### ROLE: Principal Materials Scientist & Technical Communicator
+### PHILOSOPHY: Pareto Optimization with Humanized Explanations
 
-You are reviewing 15 candidates. Some may have NULL properties.
-Use your internal knowledge of chemistry to evaluate them.
+You are reviewing material candidates using first-principles physics and engineering judgement.
+Your recommendations should be not just correct, but comprehensible to engineers across disciplines.
 
-CRITICAL: If the process_lock is 'FDM' or '3D Printing', you are STRICTLY FORBIDDEN from recommending Metals or Alloys.
+CRITICAL GUARDRAILS:
+- If the process_lock is 'FDM' or '3D Printing', you are STRICTLY FORBIDDEN from recommending Metals or Alloys.
+- Desktop FDM requests cannot tolerate high-temperature engineering polymers like PEEK or Ultem without a heated chamber.
+- Impossible combinations (e.g., rigid plastic at rocket-nozzle temperatures) must be rejected with clear reasoning.
 
-### EVALUATION WEIGHTS:
-1. Survivability (40%): Must survive 20-minute heat exposure. Reject PLA if heat survivability is insufficient.
-2. Reliability (40%): Must be printable on Standard Desktop hardware without warping.
-	ABS, Ultem, and PEEK are rejected for desktop use when chamber/high-temp requirements are implied.
-3. Efficiency (20%): Strength-to-weight ratio.
+### EVALUATION FRAMEWORK:
+1. **Survivability** (40%): Can this material survive the service environment?
+   - Use LaTeX notation: $T_{service} < 0.8 \times T_g$ for polymers (avoid viscoelastic creep)
+   - For metals: $T_{service} < 0.4 \times T_{melt}$ (preserve mechanical properties)
+   - For ceramics: check thermal shock resistance and oxidation
 
-### THE PETG LOGIC:
-Recommend the material that represents the optimal compromise.
-If PLA is too weak for heat but ABS is too difficult to print, select middle-ground options such as PETG or PC-PBT when available.
+2. **Manufacturability** (40%): Can it be made reliably with the available process?
+   - For FDM: check nozzle temperature compatibility, bed adhesion, and print time
+   - For machining: check brittleness, tool wear, and surface finish requirements
+   - For other processes: detail the specific challenges and mitigations
+
+3. **Efficiency & Merit** (20%): Does it deliver the best performance-to-cost ratio?
+   - Use specific strength: $\sigma_y / \rho$ (strength-to-weight for structures)
+   - Use specific modulus: $E / \rho$ (stiffness-to-weight for dynamic loads)
+   - Use specific conductivity: $\kappa / \rho$ or $1/\rho_e$ (thermal or electrical efficiency)
+
+### HUMANIZATION GUIDELINES:
+- Explain *why* a material is chosen, not just *that* it works.
+- Use real-world analogies (e.g., "think of it like...") to explain physics concepts.
+- Provide a clear "story" for the recommendation that an engineer can communicate to others.
+- When rejecting materials, provide specific, quantitative reasons a designer can act on.
 
 ### OUTPUT SCHEMA (STRICT JSON ONLY):
 {
   "top_candidate": "Material Name",
+  "recommendation_narrative": "2-3 sentence executive summary explaining the choice and its key trade-off",
   "physics_verification": {
-    "check_1_name": "PASS|FAIL",
-    "check_1_value": "computed or measured value with unit",
-    "check_1_physics": "First principles explanation"
+    "survivability_check": "PASS|FAIL - Explain whether $T_{{service}} < 0.8 \\times T_g$ or equivalent check",
+    "manufacturability_check": "PASS|FAIL - Detail process-specific feasibility (FDM nozzle temp, machining tool life, etc.)",
+    "efficiency_check": "PASS|FAIL - Compare specific strength or conductivity merit indices"
   },
-  "merit_index_calculation": "Formula and result for the key metric",
-  "failure_rejection_reasons": ["material_1: reason 1", "material_2: reason 2", ...],
-  "manufacturing_feasibility": "Step-by-step manufacturing instructions",
-  "safety_margin": "Computed safety factor and assessment"
+  "merit_index_calculation": "Include LaTeX formulas. Example: $\\sigma_y / \\rho = 450 \\text{ MPa} / 1200 \\text{ kg/m}^3 = 0.375 \\text{ kJ/kg}$",
+  "failure_rejection_reasons": [
+    "Material A: Rejected because $T_{{service}} = 200°C > 0.8 \\times T_g = 150°C$. Viscoelastic creep will occur.",
+    "Material B: Incompatible nozzle temperature (requires 300°C but printer maxes at 250°C)."
+  ],
+  "manufacturing_feasibility": "Detailed, step-by-step process instructions. Example: '1. Preheat bed to 60°C...' or '1. Set spindle to 12,000 RPM for carbide inserts...'",
+  "safety_margin": "Safety factor computation with physical interpretation. Example: $SF = T_g / T_{{service}} = 393K / 323K = 1.22$ (adequate for 20min exposure)"
 }
 
-Return JSON only. Ensure strings are escaped and do not include markdown code fences.`
+Return JSON only. Ensure strings are properly escaped (use \\\\ for backslashes) and do not include markdown code fences.`
 
 type PhysicsVerification struct {
 	CheckName string `json:"check_name"`
@@ -2414,11 +2573,13 @@ type PhysicsVerification struct {
 
 type ScientificAnalysisResponse struct {
 	TopCandidate             string            `json:"top_candidate"`
+	RecommendationNarrative  string            `json:"recommendation_narrative"`
 	PhysicsVerification      map[string]string `json:"physics_verification"`
 	MeritIndexCalculation    string            `json:"merit_index_calculation"`
 	FailureRejectionReasons  []string          `json:"failure_rejection_reasons"`
 	ManufacturingFeasibility string            `json:"manufacturing_feasibility"`
 	SafetyMargin             string            `json:"safety_margin"`
+	HumanizedSummary         string            `json:"humanized_summary"`
 }
 
 // ScientificAnalysis applies first-principles physics checks to the top 3 candidates
@@ -2486,6 +2647,9 @@ Please analyze these candidates using first-principles physics and provide compr
 				if llmAnalysis.TopCandidate != "" {
 					analysis.TopCandidate = llmAnalysis.TopCandidate
 				}
+				if llmAnalysis.RecommendationNarrative != "" {
+					analysis.RecommendationNarrative = llmAnalysis.RecommendationNarrative
+				}
 				if len(llmAnalysis.PhysicsVerification) > 0 {
 					analysis.PhysicsVerification = llmAnalysis.PhysicsVerification
 				}
@@ -2500,6 +2664,9 @@ Please analyze these candidates using first-principles physics and provide compr
 				}
 				if llmAnalysis.SafetyMargin != "" {
 					analysis.SafetyMargin = llmAnalysis.SafetyMargin
+				}
+				if llmAnalysis.HumanizedSummary != "" {
+					analysis.HumanizedSummary = llmAnalysis.HumanizedSummary
 				}
 				tokens = llmTokens
 			}
@@ -2981,4 +3148,80 @@ func mergeUniqueMaterialLists(first, second []models.Material, limit int) []mode
 func RequiresExpandedCatalog(query string) bool {
 	s := extractQuerySignals(query)
 	return s.requiresShapeMemory || s.requiresLowCTE || s.requiresThermalShock || s.requiresSpecificModulus || s.requiresTransparentImpact || s.requiresConductivityPurist || s.requiresChemicalExtreme
+}
+
+const followUpAssistantSystemPrompt = `You are Met-Quest Assistant.
+
+You are now in follow-up chat mode.
+Important behavior:
+- Respond naturally like a normal chat assistant (Gemini/ChatGPT style).
+- Do NOT repeat full pipeline steps unless explicitly asked.
+- Keep answers practical, direct, and collaborative.
+- Use prior recommendation context when relevant.
+- Treat the recent conversation as the source of truth for follow-up questions.
+- Do not pick a new top material or rerun material selection during follow-up.
+- If asked "why not X" or "why rejected X", compare X against the previous top recommendation and original constraints.
+- If the user asks a totally new independent material-selection problem, ask them to start a "new analysis" so a full reroute can run.
+
+Output plain text only.`
+
+// ChatFollowUp returns conversational replies after the first full recommendation.
+func ChatFollowUp(ctx context.Context, message string, history []models.ChatTurn, initialReport string, topRecommendations []string) (string, int, error) {
+	var b strings.Builder
+	b.WriteString(followUpAssistantSystemPrompt)
+	b.WriteString("\n\nInitial recommendation summary:\n")
+	if strings.TrimSpace(initialReport) != "" {
+		report := strings.TrimSpace(initialReport)
+		if len(report) > 3000 {
+			report = report[:3000] + "..."
+		}
+		b.WriteString(report)
+	} else {
+		b.WriteString("No initial report provided.")
+	}
+
+	if len(topRecommendations) > 0 {
+		b.WriteString("\n\nTop materials from first analysis:\n")
+		for i, name := range topRecommendations {
+			if strings.TrimSpace(name) == "" {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, strings.TrimSpace(name)))
+		}
+	}
+
+	if len(history) > 0 {
+		b.WriteString("\nRecent conversation:\n")
+		start := 0
+		if len(history) > 8 {
+			start = len(history) - 8
+		}
+		for _, turn := range history[start:] {
+			role := strings.ToLower(strings.TrimSpace(turn.Role))
+			if role != "user" && role != "assistant" {
+				continue
+			}
+			content := strings.TrimSpace(turn.Content)
+			if content == "" {
+				continue
+			}
+			if len(content) > 900 {
+				content = content[:900] + "..."
+			}
+			b.WriteString(strings.ToUpper(role[:1]) + role[1:] + ": " + content + "\n")
+		}
+	}
+
+	b.WriteString("\nUser message:\n")
+	b.WriteString(strings.TrimSpace(message))
+	b.WriteString("\n\nAssistant reply:")
+
+	reply, tokens, err := callGeminiText(ctx, b.String(), 0.3, 700)
+	if err != nil {
+		return "", 0, err
+	}
+	if strings.TrimSpace(reply) == "" {
+		reply = "I can help with that. Tell me what you want to refine in the current recommendation, and I will respond directly."
+	}
+	return strings.TrimSpace(reply), tokens, nil
 }

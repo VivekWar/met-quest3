@@ -201,6 +201,24 @@ func RecommendWithDispatcher(c *gin.Context) {
 		pipelineSteps = append(pipelineSteps, "✅ LLM intent constraints enabled via request header")
 	}
 
+	// ── Apply user-provided constraints ────────────────────────────────────
+	if len(req.Constraints) > 0 {
+		for _, userCon := range req.Constraints {
+			key := strings.ToLower(strings.TrimSpace(userCon.Key))
+			switch userCon.Operator {
+			case "min":
+				constraints["min_"+key] = userCon.Value
+			case "max":
+				constraints["max_"+key] = userCon.Value
+			case "equals":
+				constraints["equals_"+key] = userCon.Value
+			case "contains":
+				constraints["contains_"+key] = userCon.Value
+			}
+		}
+		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🎯 Applied %d user constraints", len(req.Constraints)))
+	}
+
 	// Route to category-specific search
 	switch routedCategory {
 	case "Polymers":
@@ -483,4 +501,28 @@ func mergeUniqueCandidates(base, extra []models.Material, limit int) []models.Ma
 		}
 	}
 	return merged
+}
+
+// ChatFollowUp handles conversational follow-up replies after the initial full recommendation.
+func ChatFollowUp(c *gin.Context) {
+	var req models.FollowUpChatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	reply, tokens, err := services.ChatFollowUp(ctx, req.Message, req.History, req.InitialReport, req.TopRecommendations)
+	if err != nil {
+		log.Printf("⚠️  ChatFollowUp failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Follow-up chat failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.FollowUpChatResponse{
+		Reply:      reply,
+		TokensUsed: tokens,
+	})
 }

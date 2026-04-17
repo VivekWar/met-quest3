@@ -39,8 +39,36 @@ type Material struct {
 
 // RecommendRequest is the POST /recommend request body.
 type RecommendRequest struct {
-	Query  string `json:"query" binding:"required"`
-	Domain string `json:"domain"`
+	Query       string       `json:"query" binding:"required"`
+	Domain      string       `json:"domain"`
+	Constraints []Constraint `json:"constraints,omitempty"`
+}
+
+// ChatTurn represents a single turn in a conversational thread.
+type ChatTurn struct {
+	Role    string `json:"role"` // user | assistant
+	Content string `json:"content"`
+}
+
+// FollowUpChatRequest is used for conversational follow-up after initial recommendation.
+type FollowUpChatRequest struct {
+	Message            string     `json:"message" binding:"required"`
+	History            []ChatTurn `json:"history,omitempty"`
+	InitialReport      string     `json:"initial_report,omitempty"`
+	TopRecommendations []string   `json:"top_recommendations,omitempty"`
+}
+
+// FollowUpChatResponse is a plain conversational assistant response.
+type FollowUpChatResponse struct {
+	Reply      string `json:"reply"`
+	TokensUsed int    `json:"tokens_used,omitempty"`
+}
+
+// Constraint holds a single constraint applied by the user
+type Constraint struct {
+	Key      string      `json:"key"`
+	Operator string      `json:"operator"` // "min", "max", "equals", "contains"
+	Value    interface{} `json:"value"`
 }
 
 // RecommendResponse is the POST /recommend response.
