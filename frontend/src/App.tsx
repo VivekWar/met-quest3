@@ -1,179 +1,223 @@
 import React, { useState, useCallback, useEffect } from 'react'
+import {
+  Circle,
+  Menu,
+  Plus,
+  Sparkles,
+  X,
+} from 'lucide-react'
 import './styles/index.css'
-import { QueryInput }    from './components/QueryInput'
-import { ReportCard }    from './components/ReportCard'
-import { RecommendResponse, ping } from './api/client'
+import './styles/chat.css'
+import './styles/chat-history.css'
+import { ChatPanel } from './components/ChatPanel'
+import { ChatHistory } from './components/ChatHistory'
+import { chatFollowup, pingStatus, recommend } from './api/client'
+import { useChatStorage, ChatMessage } from './hooks/useChatStorage'
+
+type ApiStatus = 'checking' | 'online' | 'offline'
 
 const App: React.FC = () => {
-  const [result, setResult]             = useState<RecommendResponse | null>(null)
-  const [loading, setLoading]           = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
 
-  // ── Cold Start Mitigation ────────────────────────────────────
+  const chatStorage = useChatStorage()
+
   useEffect(() => {
-    // Wake up the backend as soon as the app loads
-    ping()
+    let mounted = true
+
+    const checkApiHealth = async () => {
+      const ok = await pingStatus()
+      if (mounted) {
+        setApiStatus(ok ? 'online' : 'offline')
+      }
+    }
+
+    checkApiHealth()
+    const timer = window.setInterval(checkApiHealth, 45000)
+    return () => {
+      mounted = false
+      window.clearInterval(timer)
+    }
   }, [])
 
-  const handleResult = useCallback((res: RecommendResponse) => {
-    setResult(res)
-    // Smooth scroll to results
-    setTimeout(() => {
-      document.getElementById('report-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 100)
+  useEffect(() => {
+    if (chatStorage.isLoaded && chatStorage.sessions.length === 0) {
+      chatStorage.createSession()
+    }
+  }, [chatStorage.isLoaded, chatStorage.sessions.length, chatStorage])
+
+  useEffect(() => {
+    const syncSidebarForViewport = () => {
+      setIsSidebarOpen(window.innerWidth > 980)
+    }
+
+    syncSidebarForViewport()
+    window.addEventListener('resize', syncSidebarForViewport)
+    return () => window.removeEventListener('resize', syncSidebarForViewport)
   }, [])
+
+  const activeSession = chatStorage.getActiveSession()
+
+  const handleSendMessage = useCallback(async (query: string) => {
+    const text = query.trim()
+    if (!text || loading || !activeSession) {
+      return
+    }
+
+    if (activeSession.messages.length === 0) {
+      const title = text.length > 52 ? `${text.slice(0, 52)}...` : text
+      chatStorage.renameSession(activeSession.id, title)
+    }
+
+    const userMsg: ChatMessage = {
+      id: `${Date.now()}-user`,
+      type: 'user',
+      originalQuery: text,
+      query: text,
+      timestamp: Date.now(),
+    }
+    chatStorage.addMessage(activeSession.id, userMsg)
+
+    setLoading(true)
+    try {
+      const assistantMessages = activeSession.messages.filter((msg) => msg.type === 'assistant')
+      const shouldRunFullRecommendation = assistantMessages.length === 0
+
+      if (shouldRunFullRecommendation) {
+        const res = await recommend(text, 'Overall (Top 1000)')
+        const assistantMsg: ChatMessage = {
+          id: `${Date.now()}-assistant`,
+          type: 'assistant',
+          response: res,
+          timestamp: Date.now(),
+          tokens: res.tokens_used,
+        }
+        chatStorage.addMessage(activeSession.id, assistantMsg)
+      } else {
+        const history = activeSession.messages.slice(-10).map((msg) => ({
+          role: msg.type,
+          content: msg.type === 'user'
+            ? (msg.originalQuery || msg.query || '')
+            : (msg.response?.report || ''),
+        }))
+        const firstAssistant = assistantMessages[0]
+        const topRecommendations = (firstAssistant?.response?.recommendations || [])
+          .slice(0, 3)
+          .map((item: any) => item?.name)
+          .filter(Boolean)
+
+        const follow = await chatFollowup({
+          message: text,
+          history,
+          initial_report: firstAssistant?.response?.report || '',
+          top_recommendations: topRecommendations,
+        })
+
+        const assistantMsg: ChatMessage = {
+          id: `${Date.now()}-assistant`,
+          type: 'assistant',
+          response: {
+            recommendations: [],
+            report: follow.reply,
+            tokens_used: follow.tokens_used || 0,
+          },
+          timestamp: Date.now(),
+          tokens: follow.tokens_used || 0,
+        }
+        chatStorage.addMessage(activeSession.id, assistantMsg)
+      }
+    } catch (err) {
+      const assistantMsg: ChatMessage = {
+        id: `${Date.now()}-assistant-error`,
+        type: 'assistant',
+        response: {
+          recommendations: [],
+          report: 'I could not reach the follow-up chat endpoint. Please try again in a moment.',
+          tokens_used: 0,
+        },
+        timestamp: Date.now(),
+      }
+      chatStorage.addMessage(activeSession.id, assistantMsg)
+    } finally {
+      setLoading(false)
+    }
+  }, [activeSession, chatStorage, loading])
+
+  const handleSelectSession = useCallback((sessionId: string) => {
+    chatStorage.setActiveSessionId(sessionId)
+    if (window.innerWidth <= 980) {
+      setIsSidebarOpen(false)
+    }
+  }, [chatStorage])
+
+  const handleCreateSession = useCallback(() => {
+    chatStorage.createSession()
+    if (window.innerWidth <= 980) {
+      setIsSidebarOpen(false)
+    }
+  }, [chatStorage])
 
   return (
-    <div>
-      {/* ── Navigation ──────────────────────────────────────────── */}
-      <nav className="top-nav" style={{
-        position: 'sticky', top: 0, zIndex: 100,
-        background: 'rgba(8,12,24,0.9)',
-        backdropFilter: 'blur(16px)',
-        borderBottom: '1px solid var(--color-border)',
-        padding: '0 24px',
-      }}>
-        <div className="container nav-inner" style={{ display: 'flex', alignItems: 'center', height: 64 }}>
-          {/* Logo */}
-          <div className="nav-brand" style={{ display: 'flex', alignItems: 'center', gap: 12, marginRight: 48 }}>
-            <div style={{
-              width: 36, height: 36, borderRadius: 9,
-              background: 'linear-gradient(135deg, #00d4ff, #0080ff)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '1.1rem', fontWeight: 800,
-              boxShadow: '0 4px 16px rgba(0,212,255,0.35)',
-            }}>⚛</div>
+    <div className="app-shell">
+      <aside className={`app-sidebar ${isSidebarOpen ? 'is-open' : ''}`}>
+        <ChatHistory
+          sessions={chatStorage.sessions}
+          activeSessionId={chatStorage.activeSessionId}
+          onSelectSession={handleSelectSession}
+          onCreateNewSession={handleCreateSession}
+        />
+      </aside>
+
+      <main className="app-main">
+        <nav className="top-nav">
+          <div className="nav-brand">
+            <button
+              className="icon-button sidebar-toggle"
+              onClick={() => setIsSidebarOpen(current => !current)}
+              aria-label={isSidebarOpen ? 'Close session history' : 'Open session history'}
+              title={isSidebarOpen ? 'Close history' : 'Open history'}
+            >
+              {isSidebarOpen ? <X size={16} /> : <Menu size={16} />}
+            </button>
+            <div className="brand-mark">
+              <Sparkles size={18} />
+            </div>
             <div>
-              <div style={{ fontWeight: 800, fontSize: '0.95rem', letterSpacing: '-0.02em' }}>
-                Smart Alloy Selector
-              </div>
-              <div className="text-xs text-dim" style={{ fontWeight: 500 }}>MET-QUEST '26</div>
+              <div className="brand-title">Met-Quest Material Assistant</div>
+              <div className="brand-subtitle">Tell your use-case, constraints, and manufacturing process.</div>
             </div>
           </div>
 
-          <div style={{ flex: 1 }} />
+          <button className="btn-new-chat" onClick={handleCreateSession} title="Start a new chat">
+            <Plus size={14} /> New Chat
+          </button>
+        </nav>
 
-          {/* DB badge */}
-          <div className="nav-badge" style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 14px',
-            background: 'rgba(0,255,159,0.08)',
-            border: '1px solid rgba(0,255,159,0.2)',
-            borderRadius: 20,
-            fontSize: '0.75rem',
-          }}>
-            <span style={{
-              width: 7, height: 7, borderRadius: '50%',
-              background: '#00ff9f',
-              boxShadow: '0 0 6px #00ff9f',
-              display: 'inline-block',
-            }} />
-            <span style={{ color: '#00ff9f', fontWeight: 600 }}>8,759 Materials Loaded</span>
-          </div>
-        </div>
-      </nav>
-
-      {/* ── Hero ────────────────────────────────────────────────── */}
-      {!result && (
-        <div style={{
-          textAlign: 'center', padding: '72px 24px 48px',
-          background: 'radial-gradient(ellipse at 50% 0%, rgba(0,212,255,0.07) 0%, transparent 65%)',
-        }}>
-          <div
-            className="text-xs font-mono"
-            style={{
-              color: 'var(--color-primary)', letterSpacing: '0.15em',
-              textTransform: 'uppercase', marginBottom: 20,
-              display: 'inline-flex', alignItems: 'center', gap: 8,
-              padding: '5px 16px',
-              background: 'rgba(0,212,255,0.08)',
-              border: '1px solid rgba(0,212,255,0.2)',
-              borderRadius: 20,
-            }}
-          >
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-primary)', display: 'inline-block', animation: 'pulse-glow 2s ease-in-out infinite' }} />
-            Powered by Gemini + Local PostgreSQL RAG
-          </div>
-
-          <h1 style={{ maxWidth: 640, margin: '0 auto 16px' }}>
-            <span className="gradient-text">AI-Powered</span> Material Selection
-          </h1>
-          <p style={{ maxWidth: 540, margin: '0 auto 40px', fontSize: '1.05rem', color: 'var(--color-text-muted)' }}>
-            Describe your engineering challenge. Our AI extracts your requirements, queries 8,759+ materials,
-            and delivers a <strong style={{ color: 'var(--color-text)' }}>Virtual Scientist report</strong> with deep technical analysis.
-          </p>
-
-          {/* Feature pills */}
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 48 }}>
-            {[
-              ['🧠', 'Gemini Intent Extraction'],
-              ['🗄️', 'Local PostgreSQL RAG'],
-              ['📋', 'Virtual Scientist Report'],
-              ['⚗️', 'Backend-Driven Alloy Prediction'],
-            ].map(([icon, label]) => (
-              <div key={label as string} style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '8px 16px',
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 20,
-                fontSize: '0.8125rem',
-                color: 'var(--color-text-muted)',
-              }}>
-                <span>{icon}</span>{label}
+        <section className="app-content">
+            <div className={`nav-status nav-status-${apiStatus}`}>
+              <Circle size={10} />
+              API {apiStatus === 'checking' ? 'Checking' : apiStatus === 'online' ? 'Online' : 'Offline'}
+            </div>
+            {activeSession && (
+              <div className="chat-column chat-column--full">
+                <ChatPanel
+                  messages={activeSession.messages}
+                  onSendMessage={handleSendMessage}
+                  loading={loading}
+                />
               </div>
-            ))}
-          </div>
-        </div>
+            )}
+        </section>
+      </main>
+
+      {isSidebarOpen && (
+        <button
+          className="sidebar-backdrop"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-label="Close session history panel"
+        />
       )}
-
-      {/* ── Main Content ─────────────────────────────────────────── */}
-      <div className="container" style={{ paddingBottom: 64 }}>
-        <div style={{ maxWidth: 900, margin: '0 auto' }}>
-          <div style={{ marginBottom: 24 }}>
-            <QueryInput onResult={handleResult} onLoading={setLoading} />
-          </div>
-
-          {/* Loading skeleton */}
-          {loading && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {[160, 300, 80].map((h, i) => (
-                <div key={i} className="skeleton" style={{ height: h, borderRadius: 18 }} />
-              ))}
-            </div>
-          )}
-
-          {/* Results */}
-          {result && !loading && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-              <ReportCard result={result} />
-
-              <div style={{ textAlign: 'center' }}>
-                <button
-                  className="btn btn--outline"
-                  onClick={() => setResult(null)}
-                  id="new-search-btn"
-                >
-                  ← New Search
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Footer ──────────────────────────────────────────────── */}
-      <footer style={{
-        borderTop: '1px solid var(--color-border)',
-        padding: '20px 24px',
-        textAlign: 'center',
-      }}>
-        <p className="text-xs text-dim">
-          Smart Alloy Selector · MET-QUEST '26 ·{' '}
-          <span className="font-mono" style={{ color: 'var(--color-text-dim)' }}>
-            Go/Gin + Gemini 2.0 Flash + Neon PostgreSQL + React
-          </span>
-        </p>
-      </footer>
     </div>
   )
 }

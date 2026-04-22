@@ -1,9 +1,12 @@
 import React, { useState, useCallback } from 'react'
-import { recommend, RecommendResponse } from '../api/client'
+import { Search, WandSparkles } from 'lucide-react'
+import { recommend, RecommendResponse, Constraint } from '../api/client'
 
 interface Props {
   onResult: (result: RecommendResponse) => void
   onLoading: (loading: boolean) => void
+  constraints?: Constraint[]
+  onSubmit?: (query: string, domain: string) => void
 }
 
 export const DOMAINS = [
@@ -20,7 +23,7 @@ export const DOMAINS = [
   "Advanced Composites"
 ]
 
-export const QueryInput: React.FC<Props> = ({ onResult, onLoading }) => {
+export const QueryInput: React.FC<Props> = ({ onResult, onLoading, constraints = [], onSubmit }) => {
   const [query, setQuery] = useState('')
   const [domain, setDomain] = useState(DOMAINS[0])
   const [loading, setLoading] = useState(false)
@@ -40,9 +43,10 @@ export const QueryInput: React.FC<Props> = ({ onResult, onLoading }) => {
     setLoading(true)
     setError(null)
     onLoading(true)
+    onSubmit?.(query.trim(), domain)
 
     try {
-      const result = await recommend(query.trim(), domain)
+      const result = await recommend(query.trim(), domain, constraints)
       onResult(result)
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Request failed'
@@ -51,83 +55,72 @@ export const QueryInput: React.FC<Props> = ({ onResult, onLoading }) => {
       setLoading(false)
       onLoading(false)
     }
-  }, [query, domain, loading, onResult, onLoading])
+  }, [query, domain, loading, onResult, onLoading, onSubmit, constraints])
 
   return (
     <div className="card fade-in-up" id="query-panel">
-      {/* Header */}
-      <div className="flex items-center gap-md mb-md">
-        <div style={{
-          width: 44, height: 44, borderRadius: 12,
-          background: 'linear-gradient(135deg, #00d4ff22, #0080ff22)',
-          border: '1px solid rgba(0,212,255,0.3)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '1.25rem', flexShrink: 0,
-        }}>🧪</div>
+      <div className="panel-header">
+        <div className="panel-icon">
+          <Search size={18} />
+        </div>
         <div>
-          <h2 style={{ fontSize: '1.1rem', marginBottom: 2 }}>Problem Statement</h2>
-          <p className="text-sm text-muted">Describe your engineering requirements in plain language</p>
+          <h2 className="panel-title">Query materials</h2>
+          <p className="panel-subtitle">Describe the requirement, select a domain, and run the recommendation.</p>
         </div>
       </div>
 
       <form onSubmit={handleSubmit} id="recommend-form">
-        <textarea
-          id="query-textarea"
-          className="textarea"
-          style={{ minHeight: 140 }}
-          placeholder="e.g. I need a lightweight material for an aircraft wing spar bracket. It must withstand cyclic loading, have a melting point above 500°C, and ideally be corrosion resistant..."
-          value={query}
-          onChange={handleChange}
-          disabled={loading}
-          maxLength={2000}
-          aria-label="Engineering problem statement"
-        />
+        <div className="query-composer">
+          <textarea
+            id="query-textarea"
+            className="textarea query-textarea"
+            placeholder="Example: I need a lightweight material for an aircraft bracket with strong fatigue resistance, a melting point above 500°C, and good corrosion resistance."
+            value={query}
+            onChange={handleChange}
+            disabled={loading}
+            maxLength={2000}
+            aria-label="Engineering problem statement"
+          />
 
-        <div className="flex justify-between items-center mt-sm">
-          <span className="text-xs text-dim font-mono">{charCount}/2000</span>
-          {error && (
-            <span className="text-sm" style={{ color: '#ff4757' }}>
-              ⚠️ {error}
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-center justify-end mt-md query-actions">
-          <div className="query-controls" style={{ display: 'flex', gap: '12px' }}>
+          <div className="query-toolbar">
             <select
               value={domain}
               onChange={(e) => setDomain(e.target.value)}
-              className="textarea"
-              style={{ minHeight: 'auto', padding: '6px 12px', fontSize: '0.85rem', width: '220px' }}
+              className="select query-domain-select"
               disabled={loading}
             >
               {DOMAINS.map(d => (
-                <option key={d} value={d}>📂 {d}</option>
+                <option key={d} value={d}>{d}</option>
               ))}
             </select>
 
             <button
               id="analyze-btn"
               type="submit"
-              className="btn btn--primary"
+              className="btn btn--primary query-submit-btn"
               disabled={!query.trim() || loading}
-              style={{ flexShrink: 0 }}
             >
               {loading ? (
                 <>
-                  <span style={{
-                    width: 16, height: 16, border: '2px solid #080c18',
-                    borderTopColor: 'transparent', borderRadius: '50%',
-                    animation: 'spin 0.8s linear infinite', display: 'inline-block',
-                    flexShrink: 0,
-                  }} />
-                  Analyzing…
+                  <span className="spinner" />
+                  Running
                 </>
               ) : (
-                <>⚡ Analyze</>
+                <>
+                  <WandSparkles size={16} />
+                  Run recommendation
+                </>
               )}
             </button>
           </div>
+        </div>
+
+        <div className="query-meta-row">
+          <span className="text-xs text-dim font-mono">{charCount}/2000 characters</span>
+          {error && <span className="query-error">{error}</span>}
+          <span className="query-note">
+            The active session saves this query with any constraints you add.
+          </span>
         </div>
       </form>
     </div>

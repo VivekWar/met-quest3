@@ -217,6 +217,9 @@ cd ..
 npx -y firebase-tools@latest deploy --only hosting
 ```
 
+Production note:
+Firebase Hosting auto-deploys from GitHub `main` through `.github/workflows/firebase-hosting-merge.yml`. A manual local deploy can be overwritten by the next GitHub-triggered deploy if the same frontend changes are not committed and pushed to `main`.
+
 ### Backend
 
 The API is deployed separately through the Hugging Face Space / Docker workflow documented in `DEPLOYMENT.md`.

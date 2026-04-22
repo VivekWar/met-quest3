@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react'
+import { BadgePlus, Beaker, Sparkles, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { predict, PredictResponse } from '../api/client'
 
 const COMMON_ELEMENTS = [
@@ -79,45 +80,28 @@ export const PredictorPanel: React.FC = () => {
 
   return (
     <div className="card fade-in-up" id="predictor-panel">
-      {/* Header */}
-      <div className="flex items-center gap-md mb-md">
-        <div style={{
-          width: 44, height: 44, borderRadius: 12,
-          background: 'linear-gradient(135deg, rgba(255,215,0,0.15), rgba(255,149,0,0.1))',
-          border: '1px solid rgba(255,215,0,0.3)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '1.25rem', flexShrink: 0,
-        }}>⚗️</div>
+      <div className="panel-header">
+        <div className="panel-icon" style={{ background: 'linear-gradient(135deg, rgba(255,215,0,0.16), rgba(255,149,0,0.12))', borderColor: 'rgba(255,215,0,0.24)', color: 'var(--color-accent)' }}>
+          <Beaker size={18} />
+        </div>
         <div>
-          <h3 style={{ marginBottom: 2 }}>Custom Alloy Predictor</h3>
-          <p className="text-sm text-muted">
-            LLM-enhanced prediction — Phase 1: rule-of-mixtures baseline, Phase 2: Gemini thermodynamic refinement
-          </p>
+          <h2 className="panel-title">Alloy predictor</h2>
+          <p className="panel-subtitle">Enter a composition to generate a material estimate and compare baseline values.</p>
         </div>
       </div>
 
-      <div className="divider" />
+      <div className="section-pill-row">
+        <span className="section-pill"><SlidersHorizontal size={12} /> Composition input</span>
+        <span className="section-pill"><Sparkles size={12} /> LLM refinement</span>
+      </div>
 
-      {/* Element builder */}
       <div className="mb-md">
-        <label className="label">Composition (weight %)</label>
+        <label className="label">Composition by weight</label>
 
-        {/* Element rows */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="stack-gap" style={{ gap: 10 }}>
           {elements.map((el, idx) => (
             <div key={idx} className="flex items-center gap-md predictor-row" id={`element-row-${idx}`}>
-              <div
-                className="font-mono"
-                style={{
-                  width: 48, height: 38,
-                  background: 'rgba(0,212,255,0.08)',
-                  border: '1px solid rgba(0,212,255,0.2)',
-                  borderRadius: 8,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontWeight: 700, color: 'var(--color-primary)',
-                  fontSize: '1rem', flexShrink: 0,
-                }}
-              >{el.symbol}</div>
+              <div className="symbol-chip">{el.symbol}</div>
 
               <input
                 type="range"
@@ -144,7 +128,7 @@ export const PredictorPanel: React.FC = () => {
                 title="Remove element"
                 aria-label={`Remove ${el.symbol}`}
                 style={{ padding: '6px 10px' }}
-              >✕</button>
+              ><Trash2 size={12} /></button>
             </div>
           ))}
         </div>
@@ -176,9 +160,8 @@ export const PredictorPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* Add element */}
       <div className="mb-md">
-        <label className="label">Add Element</label>
+        <label className="label">Add element</label>
         <div className="flex gap-sm" style={{ flexWrap: 'wrap', marginBottom: 10 }}>
           {COMMON_ELEMENTS.filter(s => !elements.find(e => e.symbol === s)).map(sym => (
             <button
@@ -204,11 +187,10 @@ export const PredictorPanel: React.FC = () => {
             className="btn btn--outline"
             onClick={() => addElement(customSymbol)}
             disabled={!customSymbol.trim()}
-          >+ Add</button>
+          ><BadgePlus size={14} /> Add</button>
         </div>
       </div>
 
-      {/* Predict button */}
       <button
         id="predict-btn"
         className="btn btn--primary full-width"
@@ -223,9 +205,9 @@ export const PredictorPanel: React.FC = () => {
               borderTopColor: 'transparent', borderRadius: '50%',
               animation: 'spin 0.8s linear infinite', display: 'inline-block',
             }} />
-            Running LLM-Enhanced Prediction…
+            Running prediction
           </>
-        ) : '🔬 Predict Alloy Properties'}
+        ) : 'Predict alloy'}
       </button>
 
       {error && (
@@ -234,7 +216,6 @@ export const PredictorPanel: React.FC = () => {
         </div>
       )}
 
-      {/* Results */}
       {result && (
         <div className="fade-in-up" style={{ marginTop: 24 }}>
           <div className="divider" />
