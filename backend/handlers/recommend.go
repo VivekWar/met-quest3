@@ -50,14 +50,27 @@ func Recommend(c *gin.Context) {
 
 	// ── Step 2: Targeted category catalog retrieval ─────────────────────────
 	allMaterials := services.GetMaterialsForClass(routedClass)
+	if strings.TrimSpace(req.Domain) != "" {
+		if filtered := services.FilterByDomain(req.Domain, allMaterials); len(filtered) > 0 {
+			allMaterials = filtered
+		}
+	}
 	if len(allMaterials) == 0 {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Materials catalog is empty"})
 		return
 	}
 
+	candidatePool := services.IntentVectorRetrieve(ctx, req.Query, intent, routedClass, allMaterials, 80)
+	if len(candidatePool) < 20 {
+		candidatePool = services.MergePrimaryCandidates(candidatePool, allMaterials, 80)
+	}
+	if len(candidatePool) == 0 {
+		candidatePool = allMaterials
+	}
+
 	// ── Step 3: Long-Context Scientist Analysis ─────────────────────────────
-	// We pass the explicit user Domain selection to segregate the dataset and prevent token explosions
-	llmResponse, totalTokens, err := services.LongContextAnalyze(ctx, req.Query, req.Domain, allMaterials)
+	// Vector retrieval now drives candidate selection; long-context analysis reasons over the shortlist.
+	llmResponse, totalTokens, err := services.LongContextAnalyze(ctx, req.Query, req.Domain, candidatePool)
 	if err != nil {
 		log.Printf("ERROR: LongContextAnalyze: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI analysis failed: " + err.Error()})
@@ -68,7 +81,7 @@ func Recommend(c *gin.Context) {
 	var recommendations = []models.Material{}
 	for _, recID := range llmResponse.RecommendedIDs {
 		// Find the material in the catalog
-		for _, m := range allMaterials {
+		for _, m := range candidatePool {
 			if m.ID == recID {
 				recommendations = append(recommendations, m)
 				break
@@ -108,6 +121,7 @@ func RecommendWithDispatcher(c *gin.Context) {
 
 	totalTokensUsed := 0
 	var pipelineSteps []string
+	intent := models.IntentJSON{Filters: map[string]models.RangeFilter{}}
 
 	// ── Step 1: LLM-Powered Query Router ────────────────────────────────────
 	routedCategory, routeTokens, err := services.RouteQuery(ctx, req.Query)
@@ -124,13 +138,30 @@ func RecommendWithDispatcher(c *gin.Context) {
 
 	// Fallback: if RouteQuery didn't work, use existing intent extraction
 	if routedCategory == "" || routedCategory == "Unknown" {
-		intent, intentTokens, _ := services.ExtractIntent(ctx, req.Query)
-		routedCategory = intent.Category
+		fallbackIntent, intentTokens, _ := services.ExtractIntent(ctx, req.Query)
+		intent = fallbackIntent
+		routedCategory = fallbackIntent.Category
 		totalTokensUsed += intentTokens
 		if routedCategory == "" || routedCategory == "Unknown" {
 			routedCategory = services.InferCategoryHeuristic(req.Query)
 		}
 		pipelineSteps = append(pipelineSteps, "↩️  Fallback to intent extraction: "+routedCategory)
+	}
+
+	if len(intent.Filters) == 0 && intent.Category == "" {
+		intent.Filters = map[string]models.RangeFilter{}
+	}
+
+	if intent.Category == "" && len(intent.Filters) == 0 {
+		if extractedIntent, intentTokens, intentErr := services.ExtractIntent(ctx, req.Query); intentErr == nil {
+			intent = extractedIntent
+			totalTokensUsed += intentTokens
+			pipelineSteps = append(pipelineSteps, "🧠 Intent extraction added semantic retrieval context")
+		} else {
+			pipelineSteps = append(pipelineSteps, "⚠️  Intent extraction unavailable; semantic retrieval using query-only context")
+		}
+	} else {
+		pipelineSteps = append(pipelineSteps, "🧠 Intent extraction added semantic retrieval context")
 	}
 
 	// ── Step 2: Get all materials from database ─────────────────────────────
@@ -252,10 +283,10 @@ func RecommendWithDispatcher(c *gin.Context) {
 		pipelineSteps = append(pipelineSteps, fmt.Sprintf("⚠️  Generic search: %d candidates", len(candidates)))
 	}
 
-	vectorCandidates := services.HybridVectorRetrieve(ctx, req.Query, routedCategory, allMaterials, 30)
+	vectorCandidates := services.IntentVectorRetrieve(ctx, req.Query, intent, routedCategory, allMaterials, 30)
 	if len(vectorCandidates) > 0 {
-		candidates = mergeUniqueCandidates(candidates, vectorCandidates, 40)
-		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🧠 Vector retrieval merged %d candidates", len(vectorCandidates)))
+		candidates = mergeUniqueCandidates(vectorCandidates, candidates, 40)
+		pipelineSteps = append(pipelineSteps, fmt.Sprintf("🧠 Intent-vector retrieval seeded %d candidates", len(vectorCandidates)))
 	}
 
 	if len(candidates) < 3 {

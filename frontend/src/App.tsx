@@ -1,24 +1,31 @@
 import React, { useState, useCallback, useEffect } from 'react'
-import {
-  Circle,
-  Menu,
-  Plus,
-  Sparkles,
-  X,
-} from 'lucide-react'
+import { Circle, Menu, Plus, Sparkles, X } from 'lucide-react'
 import './styles/index.css'
 import './styles/chat.css'
 import './styles/chat-history.css'
 import { ChatPanel } from './components/ChatPanel'
 import { ChatHistory } from './components/ChatHistory'
+import { HomePage } from './components/HomePage'
 import { chatFollowup, pingStatus, recommend } from './api/client'
 import { useChatStorage, ChatMessage } from './hooks/useChatStorage'
 
 type ApiStatus = 'checking' | 'online' | 'offline'
 
-const App: React.FC = () => {
+const CHAT_ROUTE = '/chat'
+
+const getPathname = () => window.location.pathname
+
+const navigateTo = (path: string) => {
+  if (window.location.pathname !== path) {
+    window.history.pushState({}, '', path)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
+}
+
+const ChatWorkspace: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [isMobileViewport, setIsMobileViewport] = useState(false)
   const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
 
   const chatStorage = useChatStorage()
@@ -49,7 +56,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const syncSidebarForViewport = () => {
-      setIsSidebarOpen(window.innerWidth > 980)
+      const isMobile = window.innerWidth <= 980
+      setIsMobileViewport(isMobile)
+      setIsSidebarOpen(!isMobile)
     }
 
     syncSidebarForViewport()
@@ -127,7 +136,7 @@ const App: React.FC = () => {
         }
         chatStorage.addMessage(activeSession.id, assistantMsg)
       }
-    } catch (err) {
+    } catch {
       const assistantMsg: ChatMessage = {
         id: `${Date.now()}-assistant-error`,
         type: 'assistant',
@@ -159,7 +168,7 @@ const App: React.FC = () => {
   }, [chatStorage])
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${!isMobileViewport && !isSidebarOpen ? 'sidebar-collapsed' : ''}`}>
       <aside className={`app-sidebar ${isSidebarOpen ? 'is-open' : ''}`}>
         <ChatHistory
           sessions={chatStorage.sessions}
@@ -174,44 +183,51 @@ const App: React.FC = () => {
           <div className="nav-brand">
             <button
               className="icon-button sidebar-toggle"
-              onClick={() => setIsSidebarOpen(current => !current)}
+              onClick={() => setIsSidebarOpen((current) => !current)}
               aria-label={isSidebarOpen ? 'Close session history' : 'Open session history'}
               title={isSidebarOpen ? 'Close history' : 'Open history'}
             >
               {isSidebarOpen ? <X size={16} /> : <Menu size={16} />}
             </button>
-            <div className="brand-mark">
-              <Sparkles size={18} />
-            </div>
-            <div>
-              <div className="brand-title">Met-Quest Material Assistant</div>
-              <div className="brand-subtitle">Tell your use-case, constraints, and manufacturing process.</div>
-            </div>
+            <button type="button" className="home-link-brand" onClick={() => navigateTo('/')}>
+              <div className="brand-mark">
+                <Sparkles size={18} />
+              </div>
+              <div>
+                <div className="brand-title">Met-Quest Material Assistant</div>
+                <div className="brand-subtitle">Tell your use-case, constraints, and manufacturing process.</div>
+              </div>
+            </button>
           </div>
 
-          <button className="btn-new-chat" onClick={handleCreateSession} title="Start a new chat">
-            <Plus size={14} /> New Chat
-          </button>
+          <div className="top-nav-actions">
+            <button type="button" className="btn-new-chat btn-ghost" onClick={() => navigateTo('/')}>
+              Home
+            </button>
+            <button className="btn-new-chat" onClick={handleCreateSession} title="Start a new chat">
+              <Plus size={14} /> New Chat
+            </button>
+          </div>
         </nav>
 
         <section className="app-content">
-            <div className={`nav-status nav-status-${apiStatus}`}>
-              <Circle size={10} />
-              API {apiStatus === 'checking' ? 'Checking' : apiStatus === 'online' ? 'Online' : 'Offline'}
+          <div className={`nav-status nav-status-${apiStatus}`}>
+            <Circle size={10} />
+            API {apiStatus === 'checking' ? 'Checking' : apiStatus === 'online' ? 'Ready' : 'Unavailable'}
+          </div>
+          {activeSession && (
+            <div className="chat-column chat-column--full">
+              <ChatPanel
+                messages={activeSession.messages}
+                onSendMessage={handleSendMessage}
+                loading={loading}
+              />
             </div>
-            {activeSession && (
-              <div className="chat-column chat-column--full">
-                <ChatPanel
-                  messages={activeSession.messages}
-                  onSendMessage={handleSendMessage}
-                  loading={loading}
-                />
-              </div>
-            )}
+          )}
         </section>
       </main>
 
-      {isSidebarOpen && (
+      {isMobileViewport && isSidebarOpen && (
         <button
           className="sidebar-backdrop"
           onClick={() => setIsSidebarOpen(false)}
@@ -220,6 +236,22 @@ const App: React.FC = () => {
       )}
     </div>
   )
+}
+
+const App: React.FC = () => {
+  const [pathname, setPathname] = useState(getPathname())
+
+  useEffect(() => {
+    const handlePopState = () => setPathname(getPathname())
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  if (pathname === CHAT_ROUTE) {
+    return <ChatWorkspace />
+  }
+
+  return <HomePage onStartChat={() => navigateTo(CHAT_ROUTE)} />
 }
 
 export default App

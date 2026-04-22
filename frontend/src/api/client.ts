@@ -142,7 +142,9 @@ export async function ping(): Promise<void> {
 
 export async function pingStatus(): Promise<boolean> {
   try {
-    await api.get('/health')
+    await api.options('/recommend', {
+      validateStatus: (status) => status >= 200 && status < 500,
+    })
     return true
   } catch {
     return false

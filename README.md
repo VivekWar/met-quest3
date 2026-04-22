@@ -37,6 +37,78 @@ The frontend is intentionally minimal now:
 - No constraints panel in the current UI.
 - No extra workflow buttons beyond new chat, session selection, and send.
 
+## Responsive UX And Sidebar Collapse Approach
+
+The frontend now supports a consistent sidebar experience across desktop and mobile, with explicit viewport-aware behavior and tighter small-screen layout handling.
+
+### Problem Analysis
+
+- The session history panel behaved like a permanent desktop column but a mobile drawer on smaller screens.
+- Collapse/expand behavior was reliable on mobile but not robust as a true desktop collapse mode.
+- A few chat and navigation elements could feel cramped on very small screens.
+
+### Implementation Strategy
+
+1. Viewport-aware state in the app shell:
+   - Added explicit viewport mode tracking (`<= 980px` considered mobile).
+   - Sidebar default remains open on desktop and closed on mobile.
+2. Unified sidebar toggle behavior:
+   - The sidebar toggle is now available in the top bar for both desktop and mobile.
+   - On desktop, toggle collapses/expands the sidebar column.
+   - On mobile, toggle opens/closes an overlay drawer.
+3. Distinct desktop vs mobile rendering rules:
+   - Desktop collapse uses a shell-level collapsed state (`grid-template-columns: 0 1fr`) and hides sidebar interaction when collapsed.
+   - Mobile keeps the fixed-position drawer plus backdrop behavior.
+4. Chat and navigation responsiveness hardening:
+   - Improved tiny-screen spacing, font sizes, and message header wrapping.
+   - Switched mobile chat panel viewport sizing to `100dvh` semantics for better behavior on modern mobile browsers.
+
+### Breakpoints Used
+
+- `980px`: switch between desktop sidebar column and mobile drawer pattern.
+- `720px`: compact home/chat navigation presentation.
+- `640px`: compact chat message/composer presentation.
+- `560px`: compact top navigation sizing and actions.
+
+### Files Updated For This Change
+
+- `frontend/src/App.tsx`
+  - Added viewport mode state and desktop/mobile-aware sidebar behavior.
+  - Added desktop collapsed shell class handling.
+  - Limited backdrop rendering to mobile-only sidebar overlays.
+- `frontend/src/styles/index.css`
+  - Added desktop collapsed shell/sidebar styles.
+  - Kept mobile drawer behavior intact under `max-width: 980px`.
+  - Added additional tiny-screen navigation and typography adjustments.
+- `frontend/src/styles/chat.css`
+  - Improved mobile panel height handling using `100dvh`.
+  - Added compact chat message/header/composer styles for smaller widths.
+
+### Expected Behavior After Change
+
+- Desktop (`> 980px`):
+  - Sidebar is visible by default.
+  - Toggle button collapses and reopens recent chats without breaking main chat layout.
+- Mobile (`<= 980px`):
+  - Sidebar opens as a drawer.
+  - Drawer closes via toggle, session selection, new session action, or backdrop tap.
+  - Main chat remains full-width and scroll behavior is preserved.
+
+### Validation Checklist
+
+1. Desktop test (`> 980px`): open chat page, toggle recent chats closed/open repeatedly.
+2. Tablet/mobile test (`<= 980px`): open drawer, select session, verify drawer closes.
+3. Small-phone test (`<= 640px`): verify message header actions do not overlap and composer remains usable.
+4. Route test (`/` and `/chat`): confirm both home and chat pages remain functional.
+5. Frontend production build:
+
+```bash
+cd frontend
+npm run build
+```
+
+If all pass, the responsiveness and sidebar collapse update is considered complete.
+
 ## Architecture Overview
 
 ```mermaid

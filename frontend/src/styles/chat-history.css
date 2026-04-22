@@ -2,7 +2,7 @@
   height: 100%;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.66);
+  background: linear-gradient(180deg, rgba(14, 21, 34, 0.94), rgba(8, 13, 22, 0.98));
   box-shadow: var(--shadow-1);
   display: flex;
   flex-direction: column;
@@ -43,12 +43,12 @@
 .empty-icon {
   width: 48px;
   height: 48px;
-  border-radius: 14px;
+  border-radius: 8px;
   border: 1px solid var(--line-soft);
   display: grid;
   place-items: center;
   color: var(--brand);
-  background: rgba(15, 108, 109, 0.08);
+  background: rgba(84, 230, 193, 0.08);
 }
 
 .chat-history-empty p {
@@ -72,8 +72,8 @@
 .chat-history-item {
   width: 100%;
   border: 1px solid var(--line-soft);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.7);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
   color: var(--text-0);
   text-align: left;
   cursor: pointer;
@@ -84,12 +84,12 @@
 .chat-history-item:hover {
   transform: translateY(-1px);
   border-color: var(--line-strong);
-  background: #fff;
+  background: rgba(114, 170, 255, 0.08);
 }
 
 .chat-history-item.active {
-  border-color: rgba(15, 108, 109, 0.42);
-  background: rgba(15, 108, 109, 0.1);
+  border-color: rgba(84, 230, 193, 0.3);
+  background: linear-gradient(135deg, rgba(84, 230, 193, 0.12), rgba(114, 170, 255, 0.08));
 }
 
 .chat-item-content {

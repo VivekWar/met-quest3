@@ -22,6 +22,8 @@ const openRouterBaseURL = "https://openrouter.ai/api/v1/chat/completions"
 
 var (
 	retryDelayRegex = regexp.MustCompile(`"retryDelay"\s*:\s*"([0-9]+)s"`)
+	affordableTokenRegex = regexp.MustCompile(`can only afford\s+([0-9]+)`)
+	trailingCommaRegex   = regexp.MustCompile(`,(\s*[}\]])`)
 	tempCRegex      = regexp.MustCompile(`(-?[0-9]+(?:\.[0-9]+)?)\s*°?\s*[cC]\b`)
 	latexTempCRegex = regexp.MustCompile(`(-?[0-9]+(?:\.[0-9]+)?)\s*(?:\^\{?\\?circ\}?|\{\\?circ\}|degrees?)\s*\$?\s*[cC]\b`)
 	psiRegex        = regexp.MustCompile(`([0-9]{3,6})\s*psi\b`)
@@ -179,14 +181,23 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 			}
 
 			if err == nil {
-				if !isCompleteJSONObject(text) {
-					err = fmt.Errorf("model %s returned incomplete/invalid JSON payload", model)
-					markModelBackoff(model, 15*time.Second)
-				} else {
+				if normalized, normErr := normalizeJSONObject(text); normErr == nil {
 					log.Printf("✅ Google AI %s succeeded", model)
 					clearModelBackoff(model)
-					return text, tokens, nil
+					return normalized, tokens, nil
 				}
+
+				repaired, repairTokens, repairErr := repairJSONResponse(ctx, prompt, text, minInt(maxTokens, 700))
+				if repairErr == nil {
+					if normalized, normErr := normalizeJSONObject(repaired); normErr == nil {
+						log.Printf("✅ Google AI %s succeeded after JSON repair", model)
+						clearModelBackoff(model)
+						return normalized, tokens + repairTokens, nil
+					}
+				}
+
+				err = fmt.Errorf("model %s returned incomplete/invalid JSON payload", model)
+				markModelBackoff(model, 15*time.Second)
 			}
 			lastErr = err
 
@@ -219,11 +230,18 @@ func callGemini(ctx context.Context, prompt string, temperature float64, maxToke
 		log.Printf("🤖 Attempting OpenRouter Fallback (Key: %s)", maskKey(openRouterKey))
 		text, tokens, _, err := callOpenRouter(ctx, openRouterKey, prompt, temperature, maxTokens)
 		if err == nil {
-			if !isCompleteJSONObject(text) {
-				return "", 0, fmt.Errorf("openrouter returned incomplete/invalid JSON payload")
+			if normalized, normErr := normalizeJSONObject(text); normErr == nil {
+				log.Printf("✅ OpenRouter fallback succeeded")
+				return normalized, tokens, nil
 			}
-			log.Printf("✅ OpenRouter fallback succeeded")
-			return text, tokens, nil
+			repaired, repairTokens, repairErr := repairJSONResponse(ctx, prompt, text, minInt(maxTokens, 700))
+			if repairErr == nil {
+				if normalized, normErr := normalizeJSONObject(repaired); normErr == nil {
+					log.Printf("✅ OpenRouter fallback succeeded after JSON repair")
+					return normalized, tokens + repairTokens, nil
+				}
+			}
+			return "", 0, fmt.Errorf("openrouter returned incomplete/invalid JSON payload")
 		}
 		return "", 0, fmt.Errorf("all LLM providers failed: %w", err)
 	}
@@ -308,15 +326,8 @@ func callGeminiText(ctx context.Context, prompt string, temperature float64, max
 }
 
 func isCompleteJSONObject(raw string) bool {
-	cleaned := cleanJSON(raw)
-	if cleaned == "" {
-		return false
-	}
-	trimmed := strings.TrimSpace(cleaned)
-	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
-		return false
-	}
-	return json.Valid([]byte(trimmed))
+	_, err := normalizeJSONObject(raw)
+	return err == nil
 }
 
 func shouldSkipModel(model string) (bool, time.Time) {
@@ -389,41 +400,64 @@ func getMockResponse(prompt string) (string, int, error) {
 
 // callOpenRouter handles calls to the OpenRouter proxy
 func callOpenRouter(ctx context.Context, apiKey, prompt string, temperature float64, maxTokens int) (string, int, int, error) {
-	payload := openRouterRequest{
-		Model: "google/gemini-3-flash-preview",
-		Messages: []openRouterMessage{
-			{Role: "user", Content: prompt},
-		},
-		Temperature: temperature,
-		MaxTokens:   maxTokens,
+	attempt := func(tokens int) (string, int, int, error) {
+		payload := openRouterRequest{
+			Model: "google/gemini-3-flash-preview",
+			Messages: []openRouterMessage{
+				{Role: "user", Content: prompt},
+			},
+			Temperature: temperature,
+			MaxTokens:   tokens,
+		}
+
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, openRouterBaseURL, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("HTTP-Referer", "http://localhost:5173")
+		req.Header.Set("X-Title", "Smart Alloy Selector")
+
+		client := &http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", 0, 0, err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return "", 0, resp.StatusCode, fmt.Errorf("status %d: %s", resp.StatusCode, string(b))
+		}
+
+		var result openRouterResponse
+		json.NewDecoder(resp.Body).Decode(&result)
+		if len(result.Choices) == 0 {
+			return "", 0, resp.StatusCode, fmt.Errorf("empty response")
+		}
+
+		return result.Choices[0].Message.Content, result.Usage.TotalTokens, resp.StatusCode, nil
 	}
 
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, openRouterBaseURL, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("HTTP-Referer", "http://localhost:5173")
-	req.Header.Set("X-Title", "Smart Alloy Selector")
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", 0, 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return "", 0, resp.StatusCode, fmt.Errorf("status %d: %s", resp.StatusCode, string(b))
+	text, tokens, status, err := attempt(maxTokens)
+	if err == nil || status != http.StatusPaymentRequired {
+		return text, tokens, status, err
 	}
 
-	var result openRouterResponse
-	json.NewDecoder(resp.Body).Decode(&result)
-	if len(result.Choices) == 0 {
-		return "", 0, resp.StatusCode, fmt.Errorf("empty response")
+	affordable := extractAffordableTokenLimit(err.Error())
+	if affordable <= 0 {
+		return "", 0, status, err
 	}
 
-	return result.Choices[0].Message.Content, result.Usage.TotalTokens, resp.StatusCode, nil
+	retryTokens := affordable - 96
+	if retryTokens < 256 {
+		retryTokens = affordable - 32
+	}
+	if retryTokens < 128 {
+		return "", 0, status, err
+	}
+
+	log.Printf("💸 OpenRouter credit guard: retrying with reduced max_tokens=%d", retryTokens)
+	return attempt(retryTokens)
 }
 
 func cleanJSON(raw string) string {
@@ -440,6 +474,110 @@ func cleanJSON(raw string) string {
 	raw = strings.TrimPrefix(raw, "```")
 	raw = strings.TrimSuffix(raw, "```")
 	return strings.TrimSpace(raw)
+}
+
+func normalizeJSONObject(raw string) (string, error) {
+	candidates := []string{}
+
+	if extracted := extractBalancedJSONObject(raw); extracted != "" {
+		candidates = append(candidates, extracted)
+	}
+	if cleaned := cleanJSON(raw); cleaned != "" {
+		candidates = append(candidates, cleaned)
+	}
+
+	for _, candidate := range candidates {
+		normalized := sanitizeJSONCandidate(candidate)
+		if normalized == "" {
+			continue
+		}
+		if json.Valid([]byte(normalized)) {
+			return normalized, nil
+		}
+	}
+
+	return "", fmt.Errorf("no valid JSON object found")
+}
+
+func sanitizeJSONCandidate(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	candidate = strings.TrimPrefix(candidate, "```json")
+	candidate = strings.TrimPrefix(candidate, "```")
+	candidate = strings.TrimSuffix(candidate, "```")
+	candidate = strings.TrimSpace(candidate)
+	candidate = strings.ReplaceAll(candidate, "“", "\"")
+	candidate = strings.ReplaceAll(candidate, "”", "\"")
+	candidate = strings.ReplaceAll(candidate, "’", "'")
+	candidate = strings.ReplaceAll(candidate, "\u0000", "")
+	candidate = trailingCommaRegex.ReplaceAllString(candidate, "$1")
+	return strings.TrimSpace(candidate)
+}
+
+func extractBalancedJSONObject(raw string) string {
+	inString := false
+	escaped := false
+	depth := 0
+	start := -1
+
+	for i, r := range raw {
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		switch r {
+		case '\\':
+			if inString {
+				escaped = true
+			}
+		case '"':
+			inString = !inString
+		case '{':
+			if !inString {
+				if depth == 0 {
+					start = i
+				}
+				depth++
+			}
+		case '}':
+			if !inString && depth > 0 {
+				depth--
+				if depth == 0 && start >= 0 {
+					return raw[start : i+1]
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+func repairJSONResponse(ctx context.Context, originalPrompt, raw string, maxTokens int) (string, int, error) {
+	repairPrompt := fmt.Sprintf(`You are repairing a model response that was intended to satisfy the instruction below.
+
+Original instruction:
+%s
+
+Broken response:
+%s
+
+Return a single valid JSON object only.
+- Do not include markdown fences.
+- Do not add commentary.
+- Preserve the original meaning where possible.
+- If any field is missing, fill it conservatively using only information implied by the broken response or original instruction.`, originalPrompt, raw)
+
+	return callGeminiText(ctx, repairPrompt, 0.0, maxTokens)
+}
+
+func extractAffordableTokenLimit(errText string) int {
+	match := affordableTokenRegex.FindStringSubmatch(errText)
+	if len(match) < 2 {
+		return 0
+	}
+	var affordable int
+	fmt.Sscanf(match[1], "%d", &affordable)
+	return affordable
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1557,8 +1695,17 @@ func buildFallbackReport(query string, ids []int, allMaterials []models.Material
 	if !ok {
 		return ""
 	}
-	q := strings.ToLower(query)
-	isDesktopPrint := strings.Contains(q, "3d print") || strings.Contains(q, "fdm") || strings.Contains(q, "desktop printer")
+	signals := extractQuerySignals(query)
+
+	shortlist := make([]models.Material, 0, minInt(len(ids), 3))
+	for _, id := range ids {
+		if m, ok := lookup[id]; ok {
+			shortlist = append(shortlist, m)
+		}
+		if len(shortlist) == 3 {
+			break
+		}
+	}
 
 	tg := "unknown"
 	if primary.GlassTransitionTemp != nil {
@@ -1571,19 +1718,146 @@ func buildFallbackReport(query string, ids []int, allMaterials []models.Material
 
 	var b strings.Builder
 	b.WriteString("## Recommendation\n")
-	b.WriteString("- Top choice: ")
+	b.WriteString("- Best match: ")
 	b.WriteString(primary.Name)
 	b.WriteString("\n")
-	b.WriteString("- Key properties: Tg ")
-	b.WriteString(tg)
-	b.WriteString(", HDT ")
-	b.WriteString(hdt)
+
+	if len(shortlist) > 1 {
+		b.WriteString("- Shortlist: ")
+		for i, m := range shortlist {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(m.Name)
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n## Key Properties\n")
+	for _, line := range summarizeRelevantProperties(primary, tg, hdt, signals) {
+		b.WriteString("- ")
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n## Why This Choice\n")
+	b.WriteString(buildFallbackRationale(primary, query, signals))
 	b.WriteString("\n")
-	b.WriteString("- Rationale: Chosen using a Pareto trade-off between heat survivability, desktop-print feasibility, and strength-to-weight.")
-	if isDesktopPrint {
-		b.WriteString(" The selection prioritizes materials that print on standard desktop hardware without severe warping or enclosure-only requirements.")
+
+	if len(shortlist) > 1 {
+		b.WriteString("\n## Why Alternatives Ranked Lower\n")
+		for _, alt := range shortlist[1:] {
+			b.WriteString("- ")
+			b.WriteString(alt.Name)
+			b.WriteString(": ")
+			b.WriteString(buildAlternativeTradeoff(primary, alt, signals))
+			b.WriteString("\n")
+		}
+	}
+
+	manufacturingNote := buildManufacturingNote(primary, signals)
+	if manufacturingNote != "" {
+		b.WriteString("\n## Manufacturing Notes\n")
+		b.WriteString("- ")
+		b.WriteString(manufacturingNote)
+		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func summarizeRelevantProperties(m models.Material, tg string, hdt string, s querySignals) []string {
+	props := []string{}
+
+	if s.requiresConductivity || s.requiresConductivityPurist {
+		if m.ThermalConductivity != nil {
+			props = append(props, fmt.Sprintf("Thermal conductivity: ~%.1f W/mK", *m.ThermalConductivity))
+		}
+		if m.ElectricalResistivity != nil {
+			props = append(props, fmt.Sprintf("Electrical resistivity: %.3g ohm-m", *m.ElectricalResistivity))
+		}
+	}
+
+	if s.desktopFDM || s.requiresHeatMargin {
+		props = append(props, fmt.Sprintf("Glass transition: %s", tg))
+		props = append(props, fmt.Sprintf("Heat deflection temperature: %s", hdt))
+	}
+
+	if m.YieldStrength != nil {
+		props = append(props, fmt.Sprintf("Yield strength: ~%.0f MPa", *m.YieldStrength))
+	}
+	if m.Density != nil {
+		props = append(props, fmt.Sprintf("Density: ~%.2f g/cm3", *m.Density))
+	}
+	if m.MeltingPoint != nil && (s.requiresExtremeHeat || s.requiresCNC || s.requiresConductivity) {
+		props = append(props, fmt.Sprintf("Melting point: ~%.0fC", *m.MeltingPoint-273.15))
+	}
+
+	if len(props) == 0 {
+		props = append(props, "Selection based on available catalog data and deterministic physics ranking")
+	}
+	if len(props) > 4 {
+		props = props[:4]
+	}
+	return props
+}
+
+func buildFallbackRationale(m models.Material, query string, s querySignals) string {
+	switch {
+	case s.requiresConductivity && s.requiresCNC:
+		return fmt.Sprintf("%s ranked first because this request is dominated by heat-flow performance and practical machining, not just generic strength. The deterministic ranking favored materials with the highest thermal conductivity that still fit a machined-from-solid workflow.", m.Name)
+	case s.desktopFDM && s.requiresHeatMargin:
+		return fmt.Sprintf("%s was selected because it offers the best balance between surviving motor or enclosure heat and remaining printable on a normal desktop FDM setup. The fallback ranking intentionally penalized materials that need very high nozzle temperatures, enclosed industrial hardware, or that soften too early in service.", m.Name)
+	case s.requiresCNC:
+		return fmt.Sprintf("%s ranked first because this problem is process-constrained by machining and service performance. The fallback ranking favored materials that are realistic to machine from stock while still delivering the core property requested by the user.", m.Name)
+	case s.requiresAerospace:
+		return fmt.Sprintf("%s ranked first because the query signals emphasize specific performance rather than raw bulk strength. The deterministic scoring rewarded lightweight candidates that still retain meaningful structural margin.", m.Name)
+	default:
+		return fmt.Sprintf("%s was selected by the deterministic fallback because it best satisfied the inferred trade-off in the query using the available catalog properties, process limits, and category-aware penalties.", m.Name)
+	}
+}
+
+func buildAlternativeTradeoff(primary models.Material, alt models.Material, s querySignals) string {
+	if s.requiresConductivity {
+		if alt.ThermalConductivity != nil && primary.ThermalConductivity != nil && *alt.ThermalConductivity < *primary.ThermalConductivity {
+			return "lower thermal conductivity reduced its rank for a heat-transfer-driven application"
+		}
+	}
+	if s.desktopFDM {
+		if alt.ProcessingTempMaxC != nil && *alt.ProcessingTempMaxC > 300 {
+			return "it likely needs a more aggressive print setup than a standard desktop machine"
+		}
+		if alt.GlassTransitionTemp != nil && primary.GlassTransitionTemp != nil && *alt.GlassTransitionTemp < *primary.GlassTransitionTemp {
+			return "it gives away thermal margin relative to the top choice"
+		}
+	}
+	if alt.Density != nil && primary.Density != nil && *alt.Density > *primary.Density*1.25 {
+		return "it carries a noticeable weight penalty for the same job"
+	}
+	if alt.YieldStrength != nil && primary.YieldStrength != nil && *alt.YieldStrength < *primary.YieldStrength {
+		return "it offered less structural headroom than the top candidate"
+	}
+	return "it stayed viable, but the top candidate fit the combined property and manufacturing trade-off more cleanly"
+}
+
+func buildManufacturingNote(m models.Material, s querySignals) string {
+	switch {
+	case s.requiresConductivity && s.requiresCNC:
+		return "For a machined heat sink, validate stock availability, cutter loading, and surface flatness at the LED interface before freezing the design."
+	case s.desktopFDM:
+		return "Validate print orientation, wall thickness, and heat exposure in a prototype, because real warp resistance depends on geometry as much as base material."
+	case s.requiresCNC:
+		return "Check machinability, chip control, and whether the final geometry needs stress relief or conservative finishing passes."
+	default:
+		_ = m
+		return "Prototype the part and confirm the dominant failure mode under the real thermal and mechanical duty cycle before release."
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1680,6 +1954,7 @@ func RefinePrediction(ctx context.Context, input PredictorLLMInput) (PredictorLL
 func callGoogleAI(ctx context.Context, apiKey string, model string, prompt string, temperature float64, maxTokens int, apiVer string) (string, int, int, error) {
 	baseURL := fmt.Sprintf("https://generativelanguage.googleapis.com/%s/models/%s:generateContent", apiVer, model)
 	url := fmt.Sprintf("%s?key=%s", baseURL, apiKey)
+	responseSchema := inferResponseSchema(prompt)
 
 	payload := googleAIRequest{
 		Contents: []struct {
@@ -1704,9 +1979,7 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 			Temperature:      temperature,
 			MaxOutputTokens:  maxTokens,
 			ResponseMimeType: "application/json",
-			ResponseSchema: map[string]any{
-				"type": "OBJECT",
-			},
+			ResponseSchema:   responseSchema,
 		},
 	}
 
@@ -1733,6 +2006,90 @@ func callGoogleAI(ctx context.Context, apiKey string, model string, prompt strin
 	}
 
 	return result.Candidates[0].Content.Parts[0].Text, result.UsageMetadata.TotalTokenCount, resp.StatusCode, nil
+}
+
+func inferResponseSchema(prompt string) any {
+	switch {
+	case strings.Contains(prompt, `"recommended_ids"`) && strings.Contains(prompt, `"manufacturing_advice"`):
+		return map[string]any{
+			"type": "OBJECT",
+			"properties": map[string]any{
+				"recommended_ids": map[string]any{
+					"type": "ARRAY",
+					"items": map[string]any{"type": "NUMBER"},
+				},
+				"recommendation":      map[string]any{"type": "STRING"},
+				"selection_narrative": map[string]any{"type": "STRING"},
+				"rejection_logic":     map[string]any{"type": "STRING"},
+				"manufacturing_advice": map[string]any{"type": "STRING"},
+				"fundamental_physics": map[string]any{
+					"type": "OBJECT",
+				},
+			},
+		}
+	case strings.Contains(prompt, `"inferred_category"`) && strings.Contains(prompt, `"process_lock"`):
+		return map[string]any{
+			"type": "OBJECT",
+			"properties": map[string]any{
+				"inferred_category": map[string]any{"type": "STRING"},
+				"process_lock":      map[string]any{"type": "STRING"},
+				"hardware_limits": map[string]any{
+					"type": "OBJECT",
+					"properties": map[string]any{
+						"thermal_ceiling_c": map[string]any{
+							"type": "NUMBER", "nullable": true,
+						},
+						"max_hardness_vickers": map[string]any{
+							"type": "NUMBER", "nullable": true,
+						},
+					},
+				},
+				"search_parameters": map[string]any{
+					"type": "OBJECT",
+					"properties": map[string]any{
+						"primary_metric": map[string]any{
+							"type": "OBJECT",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "STRING"},
+								"min":   map[string]any{"type": "NUMBER", "nullable": true},
+								"unit":  map[string]any{"type": "STRING"},
+							},
+						},
+						"environment": map[string]any{
+							"type": "ARRAY",
+							"items": map[string]any{"type": "STRING"},
+						},
+					},
+				},
+				"merit_index": map[string]any{"type": "STRING"},
+			},
+		}
+	case strings.Contains(prompt, `"category": "Polymers|Alloys|Pure_Metals|Ceramics|Composites"`):
+		return map[string]any{
+			"type": "OBJECT",
+			"properties": map[string]any{
+				"category":   map[string]any{"type": "STRING"},
+				"confidence": map[string]any{"type": "NUMBER"},
+				"reasoning":  map[string]any{"type": "STRING"},
+			},
+		}
+	case strings.Contains(prompt, `"refined_properties"`) && strings.Contains(prompt, `"scientific_explanation"`):
+		return map[string]any{
+			"type": "OBJECT",
+			"properties": map[string]any{
+				"refined_properties": map[string]any{
+					"type": "OBJECT",
+				},
+				"scientific_explanation": map[string]any{"type": "STRING"},
+				"phase_diagram_notes":    map[string]any{"type": "STRING"},
+				"confidence":             map[string]any{"type": "STRING"},
+			},
+		}
+	default:
+		return map[string]any{
+			"type": "OBJECT",
+		}
+	}
 }
 
 func callGoogleAIText(ctx context.Context, apiKey string, model string, prompt string, temperature float64, maxTokens int, apiVer string) (string, int, int, error) {

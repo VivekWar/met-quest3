@@ -89,6 +89,36 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     })
   }
 
+  const cleanMarkdownText = (text: string) => {
+    return text
+      .replace(/^#{1,6}\s*/g, '')
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  const extractLeadText = (report: string) => {
+    const lines = report
+      .split('\n')
+      .map((line) => cleanMarkdownText(line))
+      .filter(Boolean)
+
+    return (
+      lines.find((line) => !/^[-*]/.test(line) && !/^\d+\./.test(line) && line.length > 24) ||
+      lines[0] ||
+      ''
+    )
+  }
+
+  const extractQuickFacts = (report: string) => {
+    return report
+      .split('\n')
+      .map((line) => cleanMarkdownText(line))
+      .filter((line) => Boolean(line) && (/^[-*]/.test(line) || /^\d+\./.test(line) || line.includes(':')))
+      .map((line) => line.replace(/^[-*]\s*/, '').replace(/^\d+\.\s*/, ''))
+      .slice(0, 3)
+  }
+
   const renderReport = (report: string) => {
     return report.split('\n').map((rawLine, idx) => {
       const line = rawLine.trim()
@@ -212,7 +242,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                       <div className="chat-message-response">
                         {msg.response.recommendations && msg.response.recommendations.length > 0 && (
                           <div className="recommendation-summary recommendation-summary--compact">
-                            <strong>Top shortlist</strong>
+                            <div className="assistant-highlight">
+                              <div className="assistant-highlight-label">Best match</div>
+                              <div className="assistant-highlight-title">
+                                {msg.response.final_recommendation?.name || msg.response.recommendations[0]?.name}
+                              </div>
+                              {extractLeadText(msg.response.report) && (
+                                <p className="assistant-highlight-copy">{extractLeadText(msg.response.report)}</p>
+                              )}
+                              {extractQuickFacts(msg.response.report).length > 0 && (
+                                <div className="assistant-facts">
+                                  {extractQuickFacts(msg.response.report).map((fact, idx) => (
+                                    <div key={`${msg.id}-fact-${idx}`} className="assistant-fact">
+                                      {fact}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            <strong>Shortlist</strong>
                             <div className="top3-grid">
                               {msg.response.recommendations.slice(0, 3).map((item: any, idx: number) => (
                                 <div key={`${msg.id}-${item.id ?? item.name ?? idx}`} className={`top3-card ${idx === 0 ? 'top3-card-best' : ''}`}>
@@ -248,11 +297,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                           </button>
                         )}
                       </div>
-                      {msg.tokens && (
-                        <div className="chat-message-tokens">
-                          Tokens used: {msg.tokens}
-                        </div>
-                      )}
                     </>
                   )}
                 </>
